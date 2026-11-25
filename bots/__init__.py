@@ -1,8 +1,7 @@
-from core.base_bot import BaseBot
-from bots.demo_bot import DemoBot
+from bots.amano_japon_bot import AmanoJaponBot
 from bots.xoffice_bot import XOfficeBot
 
-BOT_REGISTRY: dict[str, type[BaseBot]] = {
-    DemoBot.name: DemoBot,
-    XOfficeBot.name: XOfficeBot,
+BOT_REGISTRY = {
+    "xoffice": XOfficeBot,
+    "amano_japon": AmanoJaponBot,
 }

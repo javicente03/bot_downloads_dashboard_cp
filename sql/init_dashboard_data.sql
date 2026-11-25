@@ -123,3 +123,127 @@ BEGIN
     CREATE INDEX IX_ae_descuentos_ticket ON dbo.amano_europa_descuentos (ticket);
 END
 GO
+
+-- ============================================================================
+-- 1. TABLA: AMANO JAPAN TRANSACTIONS (Unificada 43 y 44 columnas, EN y ES)
+-- ============================================================================
+IF OBJECT_ID('dbo.amano_japon_transactions', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.amano_japon_transactions (
+        id                          BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                        VARCHAR(30)     NOT NULL, -- pld, quillota, homecenter, plazuela, conquistadores
+        fecha_reporte               DATE            NOT NULL, -- Fecha consultada en ExACT (YYYY-MM-DD)
+        archivo_origen              VARCHAR(255)    NULL,
+        fecha_carga                 DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME(),
+
+        -- Identificación y ubicación
+        parking_lot                 NVARCHAR(100)   NOT NULL,
+        area_id                     INT             NULL,
+        area_name                   NVARCHAR(100)   NULL,
+        equipment                   NVARCHAR(100)   NULL,
+        cashier                     NVARCHAR(100)   NULL,
+
+        -- Contadores y equipos
+        t_total_number              INT             NULL,
+        paid_equipment_number       INT             NULL,
+        entry_equipment_number      INT             NULL,
+        exit_equipment_number       INT             NULL,
+
+        -- Fechas operacionales (almacenadas como DATETIME2 nativo sin ambigüedad)
+        payment_date                DATETIME2(0)    NULL,
+        entry_date                  DATETIME2(0)    NULL,
+        exit_date                   DATETIME2(0)    NULL,
+
+        -- Clasificación y montos principales
+        payment_type                NVARCHAR(80)    NULL,
+        card_type                   NVARCHAR(50)    NULL,
+        fee_rate_pass_card_type     NVARCHAR(50)    NULL,
+        card_number                 VARCHAR(50)     NULL,
+        parking_fee                 DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        payment                     DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        credit                      DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+
+        -- Descuentos 1 al 9 (ordenados secuencialmente)
+        card_type_1                 NVARCHAR(50)    NULL,
+        discount_num_1              VARCHAR(50)     NULL,
+        discount_1                  DECIMAL(12, 2)  NULL,
+        card_type_2                 NVARCHAR(50)    NULL,
+        discount_num_2              VARCHAR(50)     NULL,
+        discount_2                  DECIMAL(12, 2)  NULL,
+        card_type_3                 NVARCHAR(50)    NULL,
+        discount_num_3              VARCHAR(50)     NULL,
+        discount_3                  DECIMAL(12, 2)  NULL,
+        card_type_4                 NVARCHAR(50)    NULL,
+        discount_num_4              VARCHAR(50)     NULL,
+        discount_4                  DECIMAL(12, 2)  NULL,
+        card_type_5                 NVARCHAR(50)    NULL,
+        discount_num_5              VARCHAR(50)     NULL,
+        discount_5                  DECIMAL(12, 2)  NULL,
+        card_type_6                 NVARCHAR(50)    NULL,
+        discount_num_6              VARCHAR(50)     NULL,
+        discount_6                  DECIMAL(12, 2)  NULL,
+        card_type_7                 NVARCHAR(50)    NULL,
+        discount_num_7              VARCHAR(50)     NULL,
+        discount_7                  DECIMAL(12, 2)  NULL,
+        card_type_8                 NVARCHAR(50)    NULL,
+        discount_num_8              VARCHAR(50)     NULL,
+        discount_8                  DECIMAL(12, 2)  NULL,
+        card_type_9                 NVARCHAR(50)    NULL,
+        discount_num_9              VARCHAR(50)     NULL,
+        discount_9                  DECIMAL(12, 2)  NULL,
+
+        -- Boletas fiscales 1 al 3 (Plazuela, PLD, Quillota)
+        fiscal_receipt_no_1         VARCHAR(50)     NULL,
+        fiscal_amount_1             DECIMAL(12, 2)  NULL,
+        fiscal_receipt_no_2         VARCHAR(50)     NULL,
+        fiscal_amount_2             DECIMAL(12, 2)  NULL,
+        fiscal_receipt_no_3         VARCHAR(50)     NULL,
+        fiscal_amount_3             DECIMAL(12, 2)  NULL
+    );
+
+    CREATE INDEX IX_amano_jp_tx_sede_fecha
+        ON dbo.amano_japon_transactions (sede, fecha_reporte);
+
+    CREATE INDEX IX_amano_jp_tx_payment_date
+        ON dbo.amano_japon_transactions (parking_lot, payment_date);
+END
+GO
+
+-- ============================================================================
+-- 2. TABLA: AMANO JAPAN TRACKING (Unificada 17 columnas, EN y ES)
+-- ============================================================================
+IF OBJECT_ID('dbo.amano_japon_tracking', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.amano_japon_tracking (
+        id                          BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                        VARCHAR(30)     NOT NULL, -- pld, quillota, homecenter, plazuela, conquistadores
+        fecha_reporte               DATE            NOT NULL, -- Fecha consultada en ExACT (YYYY-MM-DD)
+        archivo_origen              VARCHAR(255)    NULL,
+        fecha_carga                 DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME(),
+
+        parking_lot                 NVARCHAR(100)   NOT NULL,
+        card_type                   NVARCHAR(50)    NULL,
+        card_number                 VARCHAR(50)     NULL,
+        entry_equipment             NVARCHAR(100)   NULL,
+        entry_date                  DATETIME2(0)    NULL,
+        payment_equipment           NVARCHAR(100)   NULL,
+        payment_date                DATETIME2(0)    NULL,
+        exit_equipment              NVARCHAR(100)   NULL,
+        exit_date                   DATETIME2(0)    NULL,
+        fee_rate                    NVARCHAR(50)    NULL,
+        parking_fee                 DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        cash_sales                  DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        credit_sales                DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        disc_total                  DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        misc_sales                  DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        cashier                     NVARCHAR(100)   NULL,
+        license_plate               VARCHAR(20)     NULL
+    );
+
+    CREATE INDEX IX_amano_jp_trk_sede_fecha
+        ON dbo.amano_japon_tracking (sede, fecha_reporte);
+
+    CREATE INDEX IX_amano_jp_trk_exit_date
+        ON dbo.amano_japon_tracking (parking_lot, exit_date);
+END
+GO

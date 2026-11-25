@@ -43,6 +43,18 @@ class Settings(BaseSettings):
     XOFFICE_RECOLETA_USER: str = ""
     XOFFICE_RECOLETA_PASS: str = ""
 
+    # Credenciales Amano Japón (ExACT)
+    AMANO_JP_PLD_USER: str = ""
+    AMANO_JP_PLD_PASS: str = ""
+    AMANO_JP_QUILLOTA_USER: str = ""
+    AMANO_JP_QUILLOTA_PASS: str = ""
+    AMANO_JP_HOMECENTER_USER: str = ""
+    AMANO_JP_HOMECENTER_PASS: str = ""
+    AMANO_JP_PLAZUELA_USER: str = ""
+    AMANO_JP_PLAZUELA_PASS: str = ""
+    AMANO_JP_CONQUISTADORES_USER: str = ""
+    AMANO_JP_CONQUISTADORES_PASS: str = ""
+
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
     LOGS_DIR: Path = BASE_DIR / "logs"
 
@@ -94,6 +106,41 @@ class Settings(BaseSettings):
                 "base_url": "https://20.20.20.100",
                 "user": self.XOFFICE_RECOLETA_USER,
                 "password": self.XOFFICE_RECOLETA_PASS,
+            },
+        }
+
+    @property
+    def amano_japon_sites(self) -> dict[str, dict[str, str]]:
+        return {
+            "pld": {
+                "nombre": "PLD",
+                "login_url": "http://192.168.195.166/ExACT/menu/login/login.aspx",
+                "user": self.AMANO_JP_PLD_USER,
+                "password": self.AMANO_JP_PLD_PASS,
+            },
+            "quillota": {
+                "nombre": "Quillota",
+                "login_url": "http://192.168.195.119/ExACT/menu/login/login.aspx",
+                "user": self.AMANO_JP_QUILLOTA_USER,
+                "password": self.AMANO_JP_QUILLOTA_PASS,
+            },
+            "homecenter": {
+                "nombre": "Homecenter",
+                "login_url": "http://192.168.0.100/ExACT/menu/login/login.aspx",
+                "user": self.AMANO_JP_HOMECENTER_USER,
+                "password": self.AMANO_JP_HOMECENTER_PASS,
+            },
+            "plazuela": {
+                "nombre": "Plazuela",
+                "login_url": "http://26.140.110.60/ExACT/menu/login/login.aspx",
+                "user": self.AMANO_JP_PLAZUELA_USER,
+                "password": self.AMANO_JP_PLAZUELA_PASS,
+            },
+            "conquistadores": {
+                "nombre": "Ind. Los Conquistadores",
+                "login_url": "http://26.59.65.213/ExACT/menu/login/login.aspx",
+                "user": self.AMANO_JP_CONQUISTADORES_USER,
+                "password": self.AMANO_JP_CONQUISTADORES_PASS,
             },
         }
 
