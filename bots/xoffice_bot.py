@@ -1,7 +1,7 @@
 import csv
 from datetime import datetime, timedelta
 from pathlib import Path
-import shutil
+import re
 import unicodedata
 import polars as pl
 from playwright.async_api import Page
@@ -16,31 +16,31 @@ REPORTS_CONFIG: dict[str, dict[str, str]] = {
         "label": "Tickets",
         "path": "/xoffice/index.php?mod=report&page=ticketinformationlist&menu_select=1",
         "table": "amano_europa_tickets",
-        "date_col": "hora_entrada",
+        "date_col": "fecha_reporte",
     },
     "ventas": {
         "label": "Ventas / Pagos",
         "path": "/xoffice/index.php?mod=report&page=statpayment&menu_select=1",
         "table": "amano_europa_ventas",
-        "date_col": "fecha_pago",
+        "date_col": "fecha_reporte",
     },
     "descuentos": {
         "label": "Descuentos",
         "path": "/xoffice/index.php?mod=report&page=salesdiscount&menu_select=1",
         "table": "amano_europa_descuentos",
-        "date_col": "hora_pago",
+        "date_col": "fecha_reporte",
     },
 }
 
 TABLE_COLUMNS: dict[str, list[str]] = {
     "amano_europa_tickets": [
-        "sede", "ticket", "contrato", "perfil_acceso", "tipo_tarjeta", "producto",
+        "sede", "fecha_reporte", "ticket", "contrato", "perfil_acceso", "tipo_tarjeta", "producto",
         "entrada", "hora_entrada", "matricula", "salida", "hora_salida",
         "cajero_automatico", "hora_pago", "importe_pagar", "duracion", "eventos",
         "numero_tarjeta", "nombre", "apellido",
     ],
     "amano_europa_ventas": [
-        "sede", "fecha_pago", "dispositivo", "tipo_venta", "hora_entrada", "hora_salida",
+        "sede", "fecha_reporte", "fecha_pago", "dispositivo", "tipo_venta", "hora_entrada", "hora_salida",
         "tarifa", "descuento_monto", "importe_total", "pagado", "vuelto",
         "pagado_neto_cambio", "valor_iva", "neto", "tipo_pago", "subtipo_pago",
         "observaciones", "numero_tarjeta", "transbank", "codigo_mantenimiento",
@@ -49,7 +49,7 @@ TABLE_COLUMNS: dict[str, list[str]] = {
         "perfil_acceso", "descuento_nombre", "tienda_numero", "descuento_numero",
     ],
     "amano_europa_descuentos": [
-        "sede", "hora_pago", "dispositivo", "cliente", "contrato", "descuento",
+        "sede", "fecha_reporte", "hora_pago", "dispositivo", "cliente", "contrato", "descuento",
         "tipo_valor", "importe", "codigo_descuento", "tienda_numero", "descuento_numero",
         "numero_recibo", "ticket", "entrada", "hora_entrada", "matricula",
         "perfil_acceso", "tipo_tarjeta", "producto",
@@ -168,6 +168,7 @@ class XOfficeBot(BaseBot):
         self.log.info(f"[{sede_key.upper()}] Navegando a {report_info['label']}...")
         await page.goto(full_url, wait_until="networkidle")
 
+        # Clic en botón "Ayer" (#obj_5) y luego "Buscar" (#obj_2)
         await page.wait_for_selector("#obj_5", state="visible")
         await page.click("#obj_5")
         await page.wait_for_timeout(500)
@@ -201,11 +202,11 @@ class XOfficeBot(BaseBot):
                 await export_page.click("#obj_4")
 
             download = await download_info.value
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{sede_key}_{report_key}_{timestamp}.csv"
+            date_folder = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            filename = f"{sede_key}_{report_key}_{date_folder}.csv"
             saved_path = await BrowserManager.save_download(
                 download=download,
-                target_dir=self.download_dir / "_tmp",
+                target_dir=self.download_dir / date_folder / sede_key,
                 custom_name=filename,
             )
             return saved_path
@@ -235,31 +236,26 @@ class XOfficeBot(BaseBot):
             files.append(path)
         return files
 
-    def _archive_file(self, file_path: Path, sede_key: str, report_key: str, data_date: str) -> Path:
-        """Organiza el CSV respaldado en downloads/xoffice/<YYYY-MM-DD>/<sede>/."""
-        archive_dir = self.download_dir / data_date / sede_key
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = archive_dir / f"{sede_key}_{report_key}_{data_date}.csv"
-        if file_path.resolve() != dest_path.resolve():
-            shutil.move(str(file_path), str(dest_path))
-        return dest_path
-
-    def _cleanup_tmp_dir(self) -> None:
-        tmp_dir = self.download_dir / "_tmp"
-        if tmp_dir.exists() and not any(tmp_dir.iterdir()):
-            tmp_dir.rmdir()
+    async def _dump_debug_screenshot(self, page: Page, sede_key: str) -> None:
+        if page.is_closed():
+            return
+        shot_path = self.download_dir / f"debug_{sede_key}.png"
+        await page.screenshot(path=str(shot_path), full_page=True)
+        self.log.warning(f"[{sede_key.upper()}] Captura de depuración guardada en: {shot_path}")
 
     async def extract(self) -> list[Path]:
         self._batch_items.clear()
 
-        if "local_dir" in self.params:
-            local_path = Path(self.params["local_dir"])
+        local_dir = self.params.get("local_dir", "").strip()
+        if local_dir:
+            local_path = Path(local_dir)
             self.log.info(f"Cargando archivos locales desde: {local_path}")
             return self._discover_local_files(local_path)
 
         sites = self._resolve_sites()
         reports = self._resolve_reports()
         downloaded_files: list[Path] = []
+        yesterday_iso = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         headless_param = self.params.get("headless")
         headless = None if headless_param is None else headless_param.lower() == "true"
@@ -270,19 +266,35 @@ class XOfficeBot(BaseBot):
                 self.log.error(f"Credenciales faltantes en .env para '{sede_key}'. Saltando sede.")
                 continue
 
-            async with BrowserManager.get_page(headless=headless) as page:
-                await self._login(page, site["base_url"], site["user"], site["password"])
+            try:
+                async with BrowserManager.get_page(headless=headless) as page:
+                    try:
+                        await self._login(page, site["base_url"], site["user"], site["password"])
 
-                for report_key, report_info in reports:
-                    file_path = await self._download_report(
-                        page=page,
-                        sede_key=sede_key,
-                        base_url=site["base_url"],
-                        report_key=report_key,
-                        report_info=report_info,
-                    )
-                    self._batch_items.append((sede_key, report_key, file_path))
-                    downloaded_files.append(file_path)
+                        for report_key, report_info in reports:
+                            file_path = await self._download_report(
+                                page=page,
+                                sede_key=sede_key,
+                                base_url=site["base_url"],
+                                report_key=report_key,
+                                report_info=report_info,
+                            )
+                            self._batch_items.append((sede_key, report_key, file_path))
+                            downloaded_files.append(file_path)
+                    except Exception:
+                        await self._dump_debug_screenshot(page, sede_key)
+                        raise
+            except Exception as exc:
+                self.log.error(f"[{sede_key.upper()}] Error procesando sede: {exc}")
+                SQLServerManager.log_execution(
+                    bot_name=self.name,
+                    sede=sede_key,
+                    reporte="todos",
+                    fecha_reporte=yesterday_iso,
+                    filas_insertadas=0,
+                    estado="ERROR",
+                    mensaje_error=str(exc),
+                )
 
         return downloaded_files
 
@@ -357,8 +369,14 @@ class XOfficeBot(BaseBot):
                 )
         return df.with_columns(exprs) if exprs else df
 
-    def _align_to_table(self, df: pl.DataFrame, table_name: str, sede_key: str) -> pl.DataFrame:
-        df = df.with_columns(pl.lit(sede_key).cast(pl.Utf8).alias("sede"))
+    def _align_to_table(
+        self, df: pl.DataFrame, table_name: str, sede_key: str, report_date: str
+    ) -> pl.DataFrame:
+        report_date_obj = datetime.strptime(report_date, "%Y-%m-%d").date()
+        df = df.with_columns([
+            pl.lit(sede_key).cast(pl.Utf8).alias("sede"),
+            pl.lit(report_date_obj).cast(pl.Date).alias("fecha_reporte"),
+        ])
         target_cols = TABLE_COLUMNS[table_name]
         missing_exprs = []
         for col in target_cols:
@@ -392,7 +410,7 @@ class XOfficeBot(BaseBot):
 
         return df.select(target_cols)
 
-    def _normalize_tickets(self, df: pl.DataFrame, sede_key: str) -> pl.DataFrame:
+    def _normalize_tickets(self, df: pl.DataFrame, sede_key: str, report_date: str) -> pl.DataFrame:
         rename_map = {
             "perfil_de_acceso": "perfil_acceso",
             "tipo_de_tarjeta": "tipo_tarjeta",
@@ -406,9 +424,9 @@ class XOfficeBot(BaseBot):
         df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
         df = self._parse_dates(df, ["hora_entrada", "hora_salida", "hora_pago"])
         df = self._parse_decimals(df, ["importe_pagar"])
-        return self._align_to_table(df, "amano_europa_tickets", sede_key)
+        return self._align_to_table(df, "amano_europa_tickets", sede_key, report_date)
 
-    def _normalize_descuentos(self, df: pl.DataFrame, sede_key: str) -> pl.DataFrame:
+    def _normalize_descuentos(self, df: pl.DataFrame, sede_key: str, report_date: str) -> pl.DataFrame:
         rename_map = {
             "hora_de_pago": "hora_pago",
             "tipo_de_valor": "tipo_valor",
@@ -423,9 +441,9 @@ class XOfficeBot(BaseBot):
         df = df.rename({k: v for k, v in rename_map.items() if k in df.columns})
         df = self._parse_dates(df, ["hora_pago", "hora_entrada"])
         df = self._parse_decimals(df, ["importe"])
-        return self._align_to_table(df, "amano_europa_descuentos", sede_key)
+        return self._align_to_table(df, "amano_europa_descuentos", sede_key, report_date)
 
-    def _normalize_pagos(self, df: pl.DataFrame, sede_key: str) -> pl.DataFrame:
+    def _normalize_pagos(self, df: pl.DataFrame, sede_key: str, report_date: str) -> pl.DataFrame:
         rename_map = {
             "fecha": "fecha_pago",
             "sello_de_tiempo": "fecha_pago",
@@ -467,81 +485,90 @@ class XOfficeBot(BaseBot):
                 "neto",
             ],
         )
-        return self._align_to_table(df, "amano_europa_ventas", sede_key)
+        return self._align_to_table(df, "amano_europa_ventas", sede_key, report_date)
 
-    def transform(self, files: list[Path]) -> pl.DataFrame:
-        return pl.DataFrame()
+    def _infer_report_date(self, file_path: Path) -> str:
+        """Extrae YYYY-MM-DD del nombre o carpeta del archivo o usa ayer por defecto."""
+        fecha_param = self.params.get("fecha", "").strip()
+        if fecha_param:
+            return datetime.strptime(fecha_param, "%Y-%m-%d").strftime("%Y-%m-%d")
 
-    def load(self, df: pl.DataFrame) -> int:
-        return 0
+        match = re.search(r"(\d{4}-\d{2}-\d{2})", file_path.name) or re.search(
+            r"(\d{4}-\d{2}-\d{2})", str(file_path.parent)
+        )
+        if match:
+            return match.group(1)
 
-    async def run(self, keep_files: bool = False) -> None:
-        self.log.info(f"Iniciando ejecución | Parámetros: {self.params}")
-        await self.extract()
+        return (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-        if not self._batch_items:
-            self.log.warning("No se encontraron archivos para procesar.")
-            return
+    def transform(self, files: list[Path]) -> list[tuple[str, str, str, pl.DataFrame]]:
+        batches: list[tuple[str, str, str, pl.DataFrame]] = []
 
-        SQLServerManager.check_connection()
-
-        is_local_mode = "local_dir" in self.params
-        default_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-        files_to_delete: list[Path] = []
-        total_inserted = 0
+        if not self._batch_items and files:
+            for path in files:
+                fname = path.stem.lower()
+                sede_key = next((k for k in ("pichimapu", "indisa", "recoleta") if k in fname), None)
+                report_key = next((k for k in ("tickets", "ventas", "descuentos") if k in fname), None)
+                if sede_key and report_key:
+                    self._batch_items.append((sede_key, report_key, path))
 
         for sede_key, report_key, file_path in self._batch_items:
             self.log.info(f"[{sede_key.upper()} - {report_key.upper()}] Procesando {file_path.name}...")
+            report_date = self._infer_report_date(file_path)
             raw_df = self._read_clean_csv(file_path)
 
             if raw_df.is_empty():
-                self.log.warning(f"[{sede_key.upper()} - {report_key.upper()}] Archivo sin datos. Omitiendo.")
-                if not is_local_mode:
-                    if keep_files:
-                        archived = self._archive_file(file_path, sede_key, report_key, default_date)
-                        self.log.info(f"[{sede_key.upper()}] Archivo vacío respaldado en: {archived}")
-                    else:
-                        files_to_delete.append(file_path)
+                self.log.warning(f"[{sede_key.upper()} - {report_key.upper()}] Archivo sin datos.")
+                batches.append((sede_key, report_key, report_date, pl.DataFrame()))
                 continue
 
-            report_meta = REPORTS_CONFIG[report_key]
-            table_name = report_meta["table"]
-            date_col = report_meta["date_col"]
-
             if report_key == "tickets":
-                clean_df = self._normalize_tickets(raw_df, sede_key)
+                clean_df = self._normalize_tickets(raw_df, sede_key, report_date)
             elif report_key == "ventas":
-                clean_df = self._normalize_pagos(raw_df, sede_key)
+                clean_df = self._normalize_pagos(raw_df, sede_key, report_date)
             elif report_key == "descuentos":
-                clean_df = self._normalize_descuentos(raw_df, sede_key)
+                clean_df = self._normalize_descuentos(raw_df, sede_key, report_date)
             else:
                 continue
 
-            valid_dates = clean_df[date_col].drop_nulls()
-            data_date = (
-                valid_dates.dt.date().min().isoformat()
-                if not valid_dates.is_empty()
-                else default_date
-            )
+            batches.append((sede_key, report_key, report_date, clean_df))
 
+        return batches
+
+    def load(self, batches: list[tuple[str, str, str, pl.DataFrame]]) -> int:
+        if not batches:
+            return 0
+
+        SQLServerManager.check_connection()
+        total_inserted = 0
+
+        for sede_key, report_key, report_date, clean_df in batches:
+            if clean_df.is_empty():
+                SQLServerManager.log_execution(
+                    bot_name=self.name,
+                    sede=sede_key,
+                    reporte=report_key,
+                    fecha_reporte=report_date,
+                    filas_insertadas=0,
+                    estado="SIN_DATOS",
+                )
+                continue
+
+            table_name = REPORTS_CONFIG[report_key]["table"]
             inserted = SQLServerManager.replace_by_sede_and_dates(
                 df=clean_df,
                 table_name=table_name,
                 sede=sede_key,
-                date_column=date_col,
+                date_column="fecha_reporte",
             )
             total_inserted += inserted
+            SQLServerManager.log_execution(
+                bot_name=self.name,
+                sede=sede_key,
+                reporte=report_key,
+                fecha_reporte=report_date,
+                filas_insertadas=inserted,
+                estado="OK",
+            )
 
-            if not is_local_mode:
-                if keep_files:
-                    archived = self._archive_file(file_path, sede_key, report_key, data_date)
-                    self.log.info(f"[{sede_key.upper()}] Archivo respaldado en: {archived}")
-                else:
-                    files_to_delete.append(file_path)
-
-        if not is_local_mode:
-            if files_to_delete:
-                self.cleanup(files_to_delete)
-            self._cleanup_tmp_dir()
-
-        self.log.success(f"Proceso finalizado. Total de registros insertados en dashboard_data: {total_inserted}")
+        return total_inserted

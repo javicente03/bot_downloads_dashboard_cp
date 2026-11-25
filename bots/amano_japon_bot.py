@@ -207,6 +207,29 @@ TRANSACTIONS_POLARS_SCHEMA: dict[str, pl.DataType] = {
     "fiscal_amount_3": pl.Float64,
 }
 
+AMANO_JP_MAX_LENGTHS: dict[str, int] = {
+    "sede": 30,
+    "license_plate": 20,
+    "card_type": 50,
+    "fee_rate_pass_card_type": 50,
+    "card_number": 50,
+    "fee_rate": 50,
+    "fiscal_receipt_no_1": 50,
+    "fiscal_receipt_no_2": 50,
+    "fiscal_receipt_no_3": 50,
+    **{f"card_type_{i}": 50 for i in range(1, 10)},
+    **{f"discount_num_{i}": 50 for i in range(1, 10)},
+    "payment_type": 80,
+    "parking_lot": 100,
+    "area_name": 100,
+    "equipment": 100,
+    "cashier": 100,
+    "entry_equipment": 100,
+    "payment_equipment": 100,
+    "exit_equipment": 100,
+    "archivo_origen": 255,
+}
+
 
 class AmanoJaponBot(BaseBot):
     name = "amano_japon"
@@ -215,7 +238,6 @@ class AmanoJaponBot(BaseBot):
     def __init__(self, params: dict | None = None):
         super().__init__(params)
         self._batch_items: list[tuple[str, str, date, Path]] = []
-        self._sanitized_dfs: list[tuple[str, str, pl.DataFrame]] = []
 
     # -------------------------------------------------------------------------
     # Resolución de parámetros
@@ -453,6 +475,7 @@ class AmanoJaponBot(BaseBot):
         reports = self._resolve_reports()
         target_date = self._resolve_target_date()
         report_date_obj = target_date.date()
+        report_date_iso = report_date_obj.isoformat()
         downloaded_files: list[Path] = []
 
         headless_param = self.params.get("headless")
@@ -505,6 +528,15 @@ class AmanoJaponBot(BaseBot):
                             await popup.close()
             except Exception as exc:
                 self.log.error(f"[{sede_key.upper()}] Error procesando sede: {exc}")
+                SQLServerManager.log_execution(
+                    bot_name=self.name,
+                    sede=sede_key,
+                    reporte="todos",
+                    fecha_reporte=report_date_iso,
+                    filas_insertadas=0,
+                    estado="ERROR",
+                    mensaje_error=str(exc),
+                )
 
         return downloaded_files
 
@@ -611,7 +643,21 @@ class AmanoJaponBot(BaseBot):
         if not val:
             return 0.0 if default_zero else None
 
-        cleaned = val.replace(",", "") if csv_lang == "EN" else val.replace(".", "").replace(",", ".")
+        if "," in val and "." in val:
+            if val.rfind(",") > val.rfind("."):
+                cleaned = val.replace(".", "").replace(",", ".")
+            else:
+                cleaned = val.replace(",", "")
+        elif "," in val:
+            cleaned = val.replace(",", "") if csv_lang == "EN" else val.replace(",", ".")
+        elif "." in val:
+            if val.count(".") > 1 or csv_lang == "ES":
+                cleaned = val.replace(".", "")
+            else:
+                cleaned = val
+        else:
+            cleaned = val
+
         return round(float(cleaned), 2)
 
     @staticmethod
@@ -705,15 +751,23 @@ class AmanoJaponBot(BaseBot):
             sanitized_records.append(clean_row)
 
         df = pl.DataFrame(sanitized_records, schema=schema)
+
+        truncate_exprs = [
+            pl.col(col).str.slice(0, max_len).alias(col)
+            for col, max_len in AMANO_JP_MAX_LENGTHS.items()
+            if col in df.columns
+        ]
+        if truncate_exprs:
+            df = df.with_columns(truncate_exprs)
+
         self.log.info(
             f"[{sede_key.upper()} - {report_key.upper()}] DataFrame sanitizado: {df.height} filas "
             f"(idioma CSV={csv_lang}, archivo={csv_path.name})"
         )
         return df
 
-    def transform(self, files: list[Path]) -> pl.DataFrame:
-        self._sanitized_dfs.clear()
-        total_rows = 0
+    def transform(self, files: list[Path]) -> list[tuple[str, str, str, pl.DataFrame]]:
+        batches: list[tuple[str, str, str, pl.DataFrame]] = []
 
         if not self._batch_items and files:
             for f in files:
@@ -722,22 +776,32 @@ class AmanoJaponBot(BaseBot):
 
         for sede_key, report_key, rep_date, csv_path in self._batch_items:
             df = self._build_polars_df(sede_key, report_key, rep_date, csv_path)
-            self._sanitized_dfs.append((sede_key, report_key, df))
-            total_rows += df.height
+            batches.append((sede_key, report_key, rep_date.isoformat(), df))
 
-        return pl.DataFrame({"total_sanitized_rows": [total_rows]})
+        return batches
 
     # -------------------------------------------------------------------------
     # Carga vía SQLServerManager (con reintentos VPN y lotes de 15 filas)
     # -------------------------------------------------------------------------
-    def load(self, df: pl.DataFrame) -> int:
-        if not self._sanitized_dfs:
+    def load(self, batches: list[tuple[str, str, str, pl.DataFrame]]) -> int:
+        if not batches:
             return 0
 
         SQLServerManager.check_connection()
         total_inserted = 0
 
-        for sede_key, report_key, report_df in self._sanitized_dfs:
+        for sede_key, report_key, report_date_iso, report_df in batches:
+            if report_df.is_empty():
+                SQLServerManager.log_execution(
+                    bot_name=self.name,
+                    sede=sede_key,
+                    reporte=report_key,
+                    fecha_reporte=report_date_iso,
+                    filas_insertadas=0,
+                    estado="SIN_DATOS",
+                )
+                continue
+
             table_name = (
                 "amano_japon_tracking"
                 if report_key == "tracking"
@@ -751,21 +815,13 @@ class AmanoJaponBot(BaseBot):
                 schema="dbo",
             )
             total_inserted += inserted
+            SQLServerManager.log_execution(
+                bot_name=self.name,
+                sede=sede_key,
+                reporte=report_key,
+                fecha_reporte=report_date_iso,
+                filas_insertadas=inserted,
+                estado="OK",
+            )
 
         return total_inserted
-
-    async def run(self, keep_files: bool = False) -> None:
-        self.log.info(f"Iniciando ejecución Amano Japón | Parámetros: {self.params}")
-        files = await self.extract()
-
-        if not files:
-            self.log.warning("No se encontraron o descargaron archivos en esta ejecución.")
-            return
-
-        df_summary = self.transform(files)
-        inserted = self.load(df_summary)
-
-        self.log.success(
-            f"Proceso completado. Archivos procesados: {len(files)} | "
-            f"Total registros cargados en SQL Server: {inserted}."
-        )

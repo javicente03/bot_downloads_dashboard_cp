@@ -180,3 +180,34 @@ class SQLServerManager:
         return SQLServerManager._run_with_retry(
             lambda connection: connection.execute(text(query), params or {})
         )
+
+    @staticmethod
+    def log_execution(
+        bot_name: str,
+        sede: str,
+        reporte: str,
+        fecha_reporte: str,
+        filas_insertadas: int,
+        estado: str,
+        mensaje_error: str | None = None,
+    ) -> None:
+        """Registra el resultado de cada sede/reporte para monitoreo en el dashboard."""
+        sql = """
+            INSERT INTO [dbo].[bot_ejecuciones]
+                (bot_name, sede, reporte, fecha_reporte, filas_insertadas, estado, mensaje_error)
+            VALUES
+                (:bot_name, :sede, :reporte, :fecha_reporte, :filas_insertadas, :estado, :mensaje_error)
+        """
+        params = {
+            "bot_name": bot_name[:50],
+            "sede": sede[:30],
+            "reporte": reporte[:50],
+            "fecha_reporte": fecha_reporte,
+            "filas_insertadas": filas_insertadas,
+            "estado": estado[:20],
+            "mensaje_error": mensaje_error[:500] if mensaje_error else None,
+        }
+        try:
+            SQLServerManager.execute_query(sql, params)
+        except Exception as exc:
+            log.warning(f"No se pudo registrar auditoría en bot_ejecuciones ({sede}/{reporte}): {exc}")

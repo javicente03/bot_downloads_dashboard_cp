@@ -13,31 +13,40 @@ GO
 IF OBJECT_ID('dbo.amano_europa_tickets', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.amano_europa_tickets (
-        id BIGINT IDENTITY(1,1) PRIMARY KEY,
-        sede VARCHAR(30) NOT NULL,
-        ticket VARCHAR(50) NULL,
-        contrato NVARCHAR(100) NULL,
-        perfil_acceso NVARCHAR(100) NULL,
-        tipo_tarjeta NVARCHAR(100) NULL,
-        producto NVARCHAR(100) NULL,
-        entrada NVARCHAR(100) NULL,
-        hora_entrada DATETIME2(0) NULL,
-        matricula VARCHAR(30) NULL,
-        salida NVARCHAR(100) NULL,
-        hora_salida DATETIME2(0) NULL,
-        cajero_automatico NVARCHAR(100) NULL,
-        hora_pago DATETIME2(0) NULL,
-        importe_pagar DECIMAL(12, 2) NULL,
-        duracion VARCHAR(30) NULL,
-        eventos NVARCHAR(255) NULL,
-        numero_tarjeta VARCHAR(100) NULL,
-        nombre NVARCHAR(100) NULL,
-        apellido NVARCHAR(100) NULL,
-        fecha_carga DATETIME2(0) NOT NULL DEFAULT SYSDATETIME()
+        id                  BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                VARCHAR(30)     NOT NULL,
+        fecha_reporte       DATE            NOT NULL,
+        ticket              VARCHAR(50)     NULL,
+        contrato            NVARCHAR(100)   NULL,
+        perfil_acceso       NVARCHAR(100)   NULL,
+        tipo_tarjeta        NVARCHAR(100)   NULL,
+        producto            NVARCHAR(100)   NULL,
+        entrada             NVARCHAR(100)   NULL,
+        hora_entrada        DATETIME2(0)    NULL,
+        matricula           VARCHAR(30)     NULL,
+        salida              NVARCHAR(100)   NULL,
+        hora_salida         DATETIME2(0)    NULL,
+        cajero_automatico   NVARCHAR(100)   NULL,
+        hora_pago           DATETIME2(0)    NULL,
+        importe_pagar       DECIMAL(12, 2)  NULL,
+        duracion            VARCHAR(30)     NULL,
+        eventos             NVARCHAR(255)   NULL,
+        numero_tarjeta      VARCHAR(100)    NULL,
+        nombre              NVARCHAR(100)   NULL,
+        apellido            NVARCHAR(100)   NULL,
+        fecha_carga         DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME()
     );
 
-    CREATE INDEX IX_ae_tickets_sede_entrada ON dbo.amano_europa_tickets (sede, hora_entrada);
+    CREATE INDEX IX_ae_tickets_sede_fecha ON dbo.amano_europa_tickets (sede, fecha_reporte);
     CREATE INDEX IX_ae_tickets_ticket ON dbo.amano_europa_tickets (ticket);
+END
+ELSE IF COL_LENGTH('dbo.amano_europa_tickets', 'fecha_reporte') IS NULL
+BEGIN
+    ALTER TABLE dbo.amano_europa_tickets ADD fecha_reporte DATE NULL;
+    EXEC('UPDATE dbo.amano_europa_tickets SET fecha_reporte = COALESCE(CAST(hora_entrada AS DATE), CAST(fecha_carga AS DATE)) WHERE fecha_reporte IS NULL;');
+    ALTER TABLE dbo.amano_europa_tickets ALTER COLUMN fecha_reporte DATE NOT NULL;
+    DROP INDEX IF EXISTS IX_ae_tickets_sede_entrada ON dbo.amano_europa_tickets;
+    CREATE INDEX IX_ae_tickets_sede_fecha ON dbo.amano_europa_tickets (sede, fecha_reporte);
 END
 GO
 
@@ -47,46 +56,55 @@ GO
 IF OBJECT_ID('dbo.amano_europa_ventas', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.amano_europa_ventas (
-        id BIGINT IDENTITY(1,1) PRIMARY KEY,
-        sede VARCHAR(30) NOT NULL,
-        fecha_pago DATETIME2(0) NULL,
-        dispositivo NVARCHAR(100) NULL,
-        tipo_venta NVARCHAR(100) NULL,
-        hora_entrada DATETIME2(0) NULL,
-        hora_salida DATETIME2(0) NULL,
-        tarifa DECIMAL(12, 2) NULL,
-        descuento_monto DECIMAL(12, 2) NULL,
-        importe_total DECIMAL(12, 2) NULL,
-        pagado DECIMAL(12, 2) NULL,
-        vuelto DECIMAL(12, 2) NULL,
-        pagado_neto_cambio DECIMAL(12, 2) NULL,
-        valor_iva DECIMAL(12, 2) NULL,
-        neto DECIMAL(12, 2) NULL,
-        tipo_pago NVARCHAR(100) NULL,
-        subtipo_pago NVARCHAR(100) NULL,
-        observaciones NVARCHAR(255) NULL,
-        numero_tarjeta VARCHAR(100) NULL,
-        transbank VARCHAR(100) NULL,
-        codigo_mantenimiento VARCHAR(50) NULL,
-        usuario NVARCHAR(100) NULL,
-        turno VARCHAR(50) NULL,
-        numero_recibo VARCHAR(50) NULL,
-        recibo_fiscal VARCHAR(50) NULL,
-        ticket VARCHAR(50) NULL,
-        nombre_conductor NVARCHAR(100) NULL,
-        matricula VARCHAR(30) NULL,
-        producto NVARCHAR(100) NULL,
-        articulo NVARCHAR(100) NULL,
-        tipo_tarjeta NVARCHAR(100) NULL,
-        perfil_acceso NVARCHAR(100) NULL,
-        descuento_nombre NVARCHAR(150) NULL,
-        tienda_numero VARCHAR(50) NULL,
-        descuento_numero VARCHAR(50) NULL,
-        fecha_carga DATETIME2(0) NOT NULL DEFAULT SYSDATETIME()
+        id                      BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                    VARCHAR(30)     NOT NULL,
+        fecha_reporte           DATE            NOT NULL,
+        fecha_pago              DATETIME2(0)    NULL,
+        dispositivo             NVARCHAR(100)   NULL,
+        tipo_venta              NVARCHAR(100)   NULL,
+        hora_entrada            DATETIME2(0)    NULL,
+        hora_salida             DATETIME2(0)    NULL,
+        tarifa                  DECIMAL(12, 2)  NULL,
+        descuento_monto         DECIMAL(12, 2)  NULL,
+        importe_total           DECIMAL(12, 2)  NULL,
+        pagado                  DECIMAL(12, 2)  NULL,
+        vuelto                  DECIMAL(12, 2)  NULL,
+        pagado_neto_cambio      DECIMAL(12, 2)  NULL,
+        valor_iva               DECIMAL(12, 2)  NULL,
+        neto                    DECIMAL(12, 2)  NULL,
+        tipo_pago               NVARCHAR(100)   NULL,
+        subtipo_pago            NVARCHAR(100)   NULL,
+        observaciones           NVARCHAR(255)   NULL,
+        numero_tarjeta          VARCHAR(100)    NULL,
+        transbank               NVARCHAR(100)   NULL,
+        codigo_mantenimiento    VARCHAR(50)     NULL,
+        usuario                 NVARCHAR(100)   NULL,
+        turno                   VARCHAR(50)     NULL,
+        numero_recibo           VARCHAR(50)     NULL,
+        recibo_fiscal           VARCHAR(50)     NULL,
+        ticket                  VARCHAR(50)     NULL,
+        nombre_conductor        NVARCHAR(100)   NULL,
+        matricula               VARCHAR(30)     NULL,
+        producto                NVARCHAR(100)   NULL,
+        articulo                NVARCHAR(100)   NULL,
+        tipo_tarjeta            NVARCHAR(100)   NULL,
+        perfil_acceso           NVARCHAR(100)   NULL,
+        descuento_nombre        NVARCHAR(150)   NULL,
+        tienda_numero           VARCHAR(50)     NULL,
+        descuento_numero        VARCHAR(50)     NULL,
+        fecha_carga             DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME()
     );
 
-    CREATE INDEX IX_ae_ventas_sede_fecha ON dbo.amano_europa_ventas (sede, fecha_pago);
+    CREATE INDEX IX_ae_ventas_sede_fecha ON dbo.amano_europa_ventas (sede, fecha_reporte);
     CREATE INDEX IX_ae_ventas_ticket ON dbo.amano_europa_ventas (ticket);
+END
+ELSE IF COL_LENGTH('dbo.amano_europa_ventas', 'fecha_reporte') IS NULL
+BEGIN
+    ALTER TABLE dbo.amano_europa_ventas ADD fecha_reporte DATE NULL;
+    EXEC('UPDATE dbo.amano_europa_ventas SET fecha_reporte = COALESCE(CAST(fecha_pago AS DATE), CAST(fecha_carga AS DATE)) WHERE fecha_reporte IS NULL;');
+    ALTER TABLE dbo.amano_europa_ventas ALTER COLUMN fecha_reporte DATE NOT NULL;
+    DROP INDEX IF EXISTS IX_ae_ventas_sede_fecha ON dbo.amano_europa_ventas;
+    CREATE INDEX IX_ae_ventas_sede_fecha ON dbo.amano_europa_ventas (sede, fecha_reporte);
 END
 GO
 
@@ -96,36 +114,45 @@ GO
 IF OBJECT_ID('dbo.amano_europa_descuentos', 'U') IS NULL
 BEGIN
     CREATE TABLE dbo.amano_europa_descuentos (
-        id BIGINT IDENTITY(1,1) PRIMARY KEY,
-        sede VARCHAR(30) NOT NULL,
-        hora_pago DATETIME2(0) NULL,
-        dispositivo NVARCHAR(100) NULL,
-        cliente NVARCHAR(100) NULL,
-        contrato NVARCHAR(100) NULL,
-        descuento NVARCHAR(150) NULL,
-        tipo_valor VARCHAR(30) NULL,
-        importe DECIMAL(12, 2) NULL,
-        codigo_descuento VARCHAR(50) NULL,
-        tienda_numero VARCHAR(50) NULL,
-        descuento_numero VARCHAR(50) NULL,
-        numero_recibo VARCHAR(50) NULL,
-        ticket VARCHAR(50) NULL,
-        entrada NVARCHAR(100) NULL,
-        hora_entrada DATETIME2(0) NULL,
-        matricula VARCHAR(30) NULL,
-        perfil_acceso NVARCHAR(100) NULL,
-        tipo_tarjeta NVARCHAR(100) NULL,
-        producto NVARCHAR(100) NULL,
-        fecha_carga DATETIME2(0) NOT NULL DEFAULT SYSDATETIME()
+        id                  BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                VARCHAR(30)     NOT NULL,
+        fecha_reporte       DATE            NOT NULL,
+        hora_pago           DATETIME2(0)    NULL,
+        dispositivo         NVARCHAR(100)   NULL,
+        cliente             NVARCHAR(100)   NULL,
+        contrato            NVARCHAR(100)   NULL,
+        descuento           NVARCHAR(150)   NULL,
+        tipo_valor          VARCHAR(30)     NULL,
+        importe             DECIMAL(12, 2)  NULL,
+        codigo_descuento    VARCHAR(50)     NULL,
+        tienda_numero       VARCHAR(50)     NULL,
+        descuento_numero    VARCHAR(50)     NULL,
+        numero_recibo       VARCHAR(50)     NULL,
+        ticket              VARCHAR(50)     NULL,
+        entrada             NVARCHAR(100)   NULL,
+        hora_entrada        DATETIME2(0)    NULL,
+        matricula           VARCHAR(30)     NULL,
+        perfil_acceso       NVARCHAR(100)   NULL,
+        tipo_tarjeta        NVARCHAR(100)   NULL,
+        producto            NVARCHAR(100)   NULL,
+        fecha_carga         DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME()
     );
 
-    CREATE INDEX IX_ae_descuentos_sede_pago ON dbo.amano_europa_descuentos (sede, hora_pago);
+    CREATE INDEX IX_ae_descuentos_sede_fecha ON dbo.amano_europa_descuentos (sede, fecha_reporte);
     CREATE INDEX IX_ae_descuentos_ticket ON dbo.amano_europa_descuentos (ticket);
+END
+ELSE IF COL_LENGTH('dbo.amano_europa_descuentos', 'fecha_reporte') IS NULL
+BEGIN
+    ALTER TABLE dbo.amano_europa_descuentos ADD fecha_reporte DATE NULL;
+    EXEC('UPDATE dbo.amano_europa_descuentos SET fecha_reporte = COALESCE(CAST(hora_pago AS DATE), CAST(fecha_carga AS DATE)) WHERE fecha_reporte IS NULL;');
+    ALTER TABLE dbo.amano_europa_descuentos ALTER COLUMN fecha_reporte DATE NOT NULL;
+    DROP INDEX IF EXISTS IX_ae_descuentos_sede_pago ON dbo.amano_europa_descuentos;
+    CREATE INDEX IX_ae_descuentos_sede_fecha ON dbo.amano_europa_descuentos (sede, fecha_reporte);
 END
 GO
 
 -- ============================================================================
--- 1. TABLA: AMANO JAPAN TRANSACTIONS (Unificada 43 y 44 columnas, EN y ES)
+-- 4. TABLA: AMANO JAPAN TRANSACTIONS (Unificada 43 y 44 columnas, EN y ES)
 -- ============================================================================
 IF OBJECT_ID('dbo.amano_japon_transactions', 'U') IS NULL
 BEGIN
@@ -210,7 +237,7 @@ END
 GO
 
 -- ============================================================================
--- 2. TABLA: AMANO JAPAN TRACKING (Unificada 17 columnas, EN y ES)
+-- 5. TABLA: AMANO JAPAN TRACKING (Unificada 17 columnas, EN y ES)
 -- ============================================================================
 IF OBJECT_ID('dbo.amano_japon_tracking', 'U') IS NULL
 BEGIN
@@ -245,5 +272,27 @@ BEGIN
 
     CREATE INDEX IX_amano_jp_trk_exit_date
         ON dbo.amano_japon_tracking (parking_lot, exit_date);
+END
+GO
+
+-- ============================================================================
+-- 6. TABLA: AUDITORÍA DE EJECUCIONES PARA EL DASHBOARD
+-- ============================================================================
+IF OBJECT_ID('dbo.bot_ejecuciones', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.bot_ejecuciones (
+        id                  BIGINT IDENTITY(1,1) PRIMARY KEY,
+        bot_name            VARCHAR(50)     NOT NULL,
+        sede                VARCHAR(30)     NOT NULL,
+        reporte             VARCHAR(50)     NOT NULL,
+        fecha_reporte       DATE            NOT NULL,
+        filas_insertadas    INT             NOT NULL DEFAULT 0,
+        estado              VARCHAR(20)     NOT NULL, -- OK, SIN_DATOS, ERROR
+        mensaje_error       NVARCHAR(500)   NULL,
+        fecha_ejecucion     DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME()
+    );
+
+    CREATE INDEX IX_bot_ejecuciones_consulta
+        ON dbo.bot_ejecuciones (bot_name, sede, fecha_reporte);
 END
 GO

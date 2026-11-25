@@ -42,9 +42,9 @@ def run_bot(
         help="Parámetros dinámicos en formato clave=valor (puede repetirse)",
     ),
     keep_files: bool = typer.Option(
-        False,
-        "--keep-files",
-        help="Conservar archivos descargados tras subir a SQL Server",
+        True,
+        "--keep-files/--delete-files",
+        help="Conservar o eliminar archivos descargados tras subir a SQL Server (por defecto se conservan)",
     ),
 ):
     """Ejecuta un robot específico pasándole parámetros opcionales."""
