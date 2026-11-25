@@ -6,7 +6,6 @@ from core.logger import get_logger
 
 log = get_logger("BROWSER")
 
-
 class BrowserManager:
     @staticmethod
     @asynccontextmanager
@@ -22,6 +21,7 @@ class BrowserManager:
             )
             context = await browser.new_context(
                 accept_downloads=True,
+                ignore_https_errors=True,  # Omite advertencias SSL en redes LAN
                 viewport={"width": 1366, "height": 768},
                 user_agent=(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
