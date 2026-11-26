@@ -109,9 +109,9 @@ def _slugify_header(text_val: str) -> str:
     return "_".join(part for part in "".join(out).split("_") if part)
 
 
-class XOfficeBot(BaseBot):
-    name = "xoffice"
-    description = "Descarga e ingesta informes CSV (Tickets, Ventas, Descuentos) hacia SQL Server"
+class AmanoEuropaBot(BaseBot):
+    name = "amano_europa"
+    description = "Descarga e ingesta informes CSV de Amano Europa / XOffice (Tickets, Ventas, Descuentos) hacia SQL Server"
 
     def __init__(self, params: dict | None = None):
         super().__init__(params)
@@ -119,7 +119,7 @@ class XOfficeBot(BaseBot):
 
     def _resolve_sites(self) -> list[tuple[str, dict[str, str]]]:
         sede_param = self.params.get("sede", "todas").lower().strip()
-        all_sites = settings.xoffice_sites
+        all_sites = settings.amano_europa_sites
 
         if sede_param == "todas":
             return list(all_sites.items())

@@ -1,7 +1,7 @@
 from bots.amano_japon_bot import AmanoJaponBot
-from bots.xoffice_bot import XOfficeBot
+from bots.amano_europa_bot import AmanoEuropaBot
 
 BOT_REGISTRY = {
-    "xoffice": XOfficeBot,
+    "xoffice":  AmanoEuropaBot,
     "amano_japon": AmanoJaponBot,
 }

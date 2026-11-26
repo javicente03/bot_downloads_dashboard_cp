@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     HEADLESS: bool = True
     DOWNLOAD_TIMEOUT_MS: int = 60000
 
-    # Credenciales XOffice
+    # Credenciales Amano Europa (XOffice)
     XOFFICE_PICHIMAPU_USER: str = ""
     XOFFICE_PICHIMAPU_PASS: str = ""
     XOFFICE_INDISA_USER: str = ""
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
         )
 
     @property
-    def xoffice_sites(self) -> dict[str, dict[str, str]]:
+    def amano_europa_sites(self) -> dict[str, dict[str, str]]:
         return {
             "pichimapu": {
                 "nombre": "Pichimapu Talca",
