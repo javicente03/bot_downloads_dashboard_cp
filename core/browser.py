@@ -17,6 +17,7 @@ class BrowserManager:
                 headless=is_headless,
                 args=[
                     "--disable-blink-features=AutomationControlled",
+                    "--disable-popup-blocking",
                     "--no-sandbox",
                 ],
             )

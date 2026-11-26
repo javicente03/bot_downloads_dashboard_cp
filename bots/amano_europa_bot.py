@@ -272,15 +272,25 @@ class AmanoEuropaBot(BaseBot):
                         await self._login(page, site["base_url"], site["user"], site["password"])
 
                         for report_key, report_info in reports:
-                            file_path = await self._download_report(
-                                page=page,
-                                sede_key=sede_key,
-                                base_url=site["base_url"],
-                                report_key=report_key,
-                                report_info=report_info,
-                            )
-                            self._batch_items.append((sede_key, report_key, file_path))
-                            downloaded_files.append(file_path)
+                            report_page = await page.context.new_page()
+                            report_page.set_default_timeout(settings.DOWNLOAD_TIMEOUT_MS)
+                            try:
+                                file_path = await self._download_report(
+                                    page=report_page,
+                                    sede_key=sede_key,
+                                    base_url=site["base_url"],
+                                    report_key=report_key,
+                                    report_info=report_info,
+                                )
+                                self._batch_items.append((sede_key, report_key, file_path))
+                                downloaded_files.append(file_path)
+                            except Exception:
+                                await self._dump_debug_screenshot(report_page, f"{sede_key}_{report_key}")
+                                raise
+                            finally:
+                                for p in list(page.context.pages):
+                                    if p != page and not p.is_closed():
+                                        await p.close()
                     except Exception:
                         await self._dump_debug_screenshot(page, sede_key)
                         raise
