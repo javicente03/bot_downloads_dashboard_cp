@@ -296,3 +296,151 @@ BEGIN
         ON dbo.bot_ejecuciones (bot_name, sede, fecha_reporte);
 END
 GO
+
+-- ============================================================================
+-- 1. TABLA: redcomercio_cps_pagos (38 columnas Excel + metadatos)
+-- ============================================================================
+IF OBJECT_ID('dbo.redcomercio_cps_pagos', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.redcomercio_cps_pagos (
+        id                              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                            VARCHAR(30)     NOT NULL, -- 'redcomercio_cps'
+        fecha_reporte                   DATE            NOT NULL,
+        archivo_origen                  VARCHAR(255)    NULL,
+        fecha_carga                     DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME(),
+
+        -- Identificación y ubicación
+        pago_id                         BIGINT          NULL,
+        transaccion_id                  BIGINT          NULL,
+        empresa                         NVARCHAR(100)   NULL,
+        sucursal                        NVARCHAR(100)   NULL,
+        calza                           NVARCHAR(50)    NULL,
+        patente                         VARCHAR(30)     NULL,
+        operador                        NVARCHAR(150)   NULL,
+        dispositivo                     NVARCHAR(150)   NULL,
+        host                            NVARCHAR(150)   NULL,
+
+        -- Tiempo y montos
+        minutos                         INT             NULL,
+        subtotal                        DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        redondeo                        DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        descuento                       DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        monto                           DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        nombre_descuento                NVARCHAR(150)   NULL,
+        cupon_descuento                 NVARCHAR(100)   NULL,
+
+        -- Fechas y documentos
+        fecha_creacion                  DATETIME2(0)    NULL,
+        fecha_exito_rechazo             DATETIME2(0)    NULL,
+        folio                           VARCHAR(50)     NULL,
+        estado                          NVARCHAR(80)    NULL,
+        estado_sii                      VARCHAR(50)     NULL,
+
+        -- Medio de pago y autorización
+        medio_pago                      NVARCHAR(100)   NULL,
+        tipo_tarjeta                    VARCHAR(50)     NULL,
+        nro_tarjeta                     VARCHAR(50)     NULL,
+        servicio                        NVARCHAR(100)   NULL,
+        tipo_cobro                      NVARCHAR(100)   NULL,
+        codigo_autorizacion             VARCHAR(80)     NULL,
+        nro_operacion                   VARCHAR(80)     NULL,
+        confirmacion                    NVARCHAR(80)    NULL,
+        descripcion                     NVARCHAR(255)   NULL,
+        rut_suscripcion                 VARCHAR(30)     NULL,
+        url                             VARCHAR(255)    NULL,
+        voucher_url                     VARCHAR(500)    NULL,
+
+        -- Recarga Sonda
+        recarga_sonda_id_tarjeta        VARCHAR(80)     NULL,
+        recarga_sonda_id_tx_carga       VARCHAR(80)     NULL,
+        recarga_sonda_anulada           VARCHAR(50)     NULL,
+        recarga_sonda_id_tx_anulacion   VARCHAR(80)     NULL,
+        recarga_sonda_saldo_actualizado DECIMAL(12, 2)  NULL
+    );
+
+    CREATE INDEX IX_rc_pagos_sede_fecha
+        ON dbo.redcomercio_cps_pagos (sede, fecha_reporte);
+
+    CREATE INDEX IX_rc_pagos_sucursal_fecha
+        ON dbo.redcomercio_cps_pagos (sucursal, fecha_reporte);
+
+    CREATE INDEX IX_rc_pagos_tx_id
+        ON dbo.redcomercio_cps_pagos (transaccion_id);
+END
+GO
+
+-- ============================================================================
+-- 2. TABLA: redcomercio_cps_transacciones (39 columnas Excel + timestamps + metadatos)
+-- ============================================================================
+IF OBJECT_ID('dbo.redcomercio_cps_transacciones', 'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.redcomercio_cps_transacciones (
+        id                              BIGINT IDENTITY(1,1) PRIMARY KEY,
+        sede                            VARCHAR(30)     NOT NULL, -- 'redcomercio_cps'
+        fecha_reporte                   DATE            NOT NULL,
+        archivo_origen                  VARCHAR(255)    NULL,
+        fecha_carga                     DATETIME2(0)    NOT NULL DEFAULT SYSDATETIME(),
+
+        -- Identificación y fechas operacionales
+        transaccion_id                  BIGINT          NULL,
+        patente                         VARCHAR(30)     NULL,
+        fecha_entrada                   DATE            NULL,
+        hora_entrada                    VARCHAR(15)     NULL,
+        fecha_hora_entrada              DATETIME2(0)    NULL,
+        fecha_salida                    DATE            NULL,
+        hora_salida                     VARCHAR(15)     NULL,
+        fecha_hora_salida               DATETIME2(0)    NULL,
+        fecha_cobro                     DATE            NULL,
+        hora_cobro                      VARCHAR(15)     NULL,
+        fecha_hora_cobro                DATETIME2(0)    NULL,
+
+        -- Flujo y dispositivos
+        tipo_transaccion                NVARCHAR(100)   NULL,
+        metodo_ingreso                  NVARCHAR(100)   NULL,
+        dispositivo_entrada             NVARCHAR(150)   NULL,
+        dispositivo_salida              NVARCHAR(150)   NULL,
+
+        -- Montos
+        subtotal                        DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        redondeo                        DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        descuento                       DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        cobrado                         DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        saldo_administrativo            DECIMAL(12, 2)  NOT NULL DEFAULT 0,
+        metodo_pago                     NVARCHAR(100)   NULL,
+
+        -- Usuarios, ubicación y vehículo
+        usuario_entrada                 NVARCHAR(150)   NULL,
+        usuario_salida                  NVARCHAR(150)   NULL,
+        sucursal                        NVARCHAR(100)   NULL,
+        calza                           NVARCHAR(50)    NULL,
+        tipo_vehiculo                   NVARCHAR(80)    NULL,
+        minutos                         INT             NULL,
+        nombre_descuento                NVARCHAR(150)   NULL,
+        cupon_descuento                 NVARCHAR(100)   NULL,
+        estado                          NVARCHAR(80)    NULL,
+        comentario_entrada              NVARCHAR(255)   NULL,
+        comentario_salida               NVARCHAR(255)   NULL,
+
+        -- Tickets, LPR y referencias
+        folio                           VARCHAR(50)     NULL,
+        reimpresiones_ticket_salida     INT             NULL,
+        cantidad_tickets_qr_impresos    INT             NULL,
+        ticket_liberado                 VARCHAR(50)     NULL,
+        dueno_tarjeta                   NVARCHAR(150)   NULL,
+        lpr_entrada                     VARCHAR(30)     NULL,
+        lpr_salida                      VARCHAR(30)     NULL,
+        id_reserva                      VARCHAR(80)     NULL,
+        url                             VARCHAR(255)    NULL,
+        nro_ticket                      VARCHAR(80)     NULL
+    );
+
+    CREATE INDEX IX_rc_tx_sede_fecha
+        ON dbo.redcomercio_cps_transacciones (sede, fecha_reporte);
+
+    CREATE INDEX IX_rc_tx_sucursal_fecha
+        ON dbo.redcomercio_cps_transacciones (sucursal, fecha_reporte);
+
+    CREATE INDEX IX_rc_tx_id
+        ON dbo.redcomercio_cps_transacciones (transaccion_id);
+END
+GO

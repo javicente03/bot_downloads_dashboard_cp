@@ -50,8 +50,7 @@ class SQLServerManager:
     def _bulk_insert(connection, df: pl.DataFrame, table_name: str, schema: str) -> int:
         cols = df.columns
         num_cols = len(cols)
-        # Lotes de máximo 15 filas para mantener paquetes pequeños (~4-7 KB) y estables sobre Radmin VPN
-        batch_size = max(1, min(15, 2000 // num_cols))
+        batch_size = max(1, min(45, 2000 // num_cols))
 
         cols_sql = ", ".join(f"[{c}]" for c in cols)
         records = SQLServerManager._prepare_records(df)
@@ -75,7 +74,7 @@ class SQLServerManager:
                 f"VALUES {', '.join(values_clauses)}"
             )
             connection.execute(insert_sql, bind_params)
-            time.sleep(0.05)
+            time.sleep(0.015)
 
         return total_rows
 

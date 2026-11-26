@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     AMANO_JP_CONQUISTADORES_USER: str = ""
     AMANO_JP_CONQUISTADORES_PASS: str = ""
 
+    # Credenciales RedComercio CPS (ParkingApp)
+    REDCOMERCIO_CPS_USER: str = ""
+    REDCOMERCIO_CPS_PASS: str = ""
+
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
     LOGS_DIR: Path = BASE_DIR / "logs"
 
@@ -72,7 +76,6 @@ class Settings(BaseSettings):
     def sqlserver_url(self) -> URL:
         driver = self.resolved_db_driver
         query_params: dict[str, str] = {"driver": driver}
-        # El driver legacy "SQL Server" no soporta TrustServerCertificate
         if "ODBC Driver" in driver or "Native Client" in driver:
             query_params["TrustServerCertificate"] = "yes"
 
@@ -142,6 +145,16 @@ class Settings(BaseSettings):
                 "user": self.AMANO_JP_CONQUISTADORES_USER,
                 "password": self.AMANO_JP_CONQUISTADORES_PASS,
             },
+        }
+
+    @property
+    def redcomercio_cps_config(self) -> dict[str, str]:
+        return {
+            "nombre": "RedComercio CPS",
+            "base_url": "https://admin.parkingapp.cl",
+            "login_url": "https://admin.parkingapp.cl/ingresar",
+            "user": self.REDCOMERCIO_CPS_USER,
+            "password": self.REDCOMERCIO_CPS_PASS,
         }
 
 
