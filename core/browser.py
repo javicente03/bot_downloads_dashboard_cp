@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright, Page, Download
 from config.settings import settings
 from core.logger import get_logger
+from datetime import datetime
 
 log = get_logger("BROWSER")
 
@@ -42,6 +43,17 @@ class BrowserManager:
         target_dir.mkdir(parents=True, exist_ok=True)
         filename = custom_name or download.suggested_filename
         destination = target_dir / filename
-        await download.save_as(destination)
+
+        try:
+            await download.save_as(destination)
+        except PermissionError:
+            stamp = datetime.now().strftime("%H%M%S")
+            destination = target_dir / f"{destination.stem}_{stamp}{destination.suffix}"
+            log.warning(
+                f"Archivo destino bloqueado (posiblemente abierto en Excel). "
+                f"Guardando como: {destination.name}"
+            )
+            await download.save_as(destination)
+
         log.info(f"Archivo descargado en: {destination}")
         return destination

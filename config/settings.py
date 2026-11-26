@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     REDCOMERCIO_CPS_USER: str = ""
     REDCOMERCIO_CPS_PASS: str = ""
 
+    # Credenciales RedComercio Dávila (ParkingApp)
+    REDCOMERCIO_DAVILA_USER: str = ""
+    REDCOMERCIO_DAVILA_PASS: str = ""
+
     DOWNLOADS_DIR: Path = BASE_DIR / "downloads"
     LOGS_DIR: Path = BASE_DIR / "logs"
 
@@ -155,6 +159,16 @@ class Settings(BaseSettings):
             "login_url": "https://admin.parkingapp.cl/ingresar",
             "user": self.REDCOMERCIO_CPS_USER,
             "password": self.REDCOMERCIO_CPS_PASS,
+        }
+
+    @property
+    def redcomercio_davila_config(self) -> dict[str, str]:
+        return {
+            "nombre": "RedComercio Dávila",
+            "base_url": "https://admin.parkingapp.cl",
+            "login_url": "https://admin.parkingapp.cl/ingresar",
+            "user": self.REDCOMERCIO_DAVILA_USER,
+            "password": self.REDCOMERCIO_DAVILA_PASS,
         }
 
 
