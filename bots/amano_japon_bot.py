@@ -9,6 +9,9 @@ from core.base_bot import BaseBot
 from core.browser import BrowserManager
 from core.database import SQLServerManager
 
+class NoDataAvailableError(Exception):
+    """El portal confirmó que no existen registros para la fecha consultada."""
+
 
 REPORTS_CONFIG: dict[str, dict[str, str]] = {
     "transacciones": {
@@ -424,12 +427,61 @@ class AmanoJaponBot(BaseBot):
         await export_btn.wait_for(state="visible")
         dialogs.clear()
 
+        iframe_reloaded = False
+        if content_frame:
+            def _on_frame_load(_frame) -> None:
+                nonlocal iframe_reloaded
+                iframe_reloaded = True
+
+            content_frame.on("load", _on_frame_load)
+
         try:
-            async with popup.expect_download(timeout=30000) as download_info:
+            async with popup.expect_download(timeout=35000) as download_info:
                 await export_btn.click()
         except Exception as exc:
+            no_data_tokens = (
+                "no data",
+                "no hay datos",
+                "sin datos",
+                "no record",
+                "no se encontr",
+                "0 record",
+                "ningún registro",
+                "there is no data",
+            )
             if dialogs:
-                raise RuntimeError(f"ExACT mostró alerta en {report_key}: {' | '.join(dialogs)}") from exc
+                dialog_msg = " | ".join(dialogs)
+                if any(tok in dialog_msg.lower() for tok in no_data_tokens):
+                    raise NoDataAvailableError(
+                        f"Portal ExACT sin registros para {date_str}: '{dialog_msg}'"
+                    ) from exc
+                raise RuntimeError(f"ExACT mostró alerta en {report_key}: {dialog_msg}") from exc
+
+            page_text = ""
+            if content_frame:
+                try:
+                    page_text = (await content_frame.locator("body").inner_text(timeout=3000)).strip()
+                except Exception:
+                    pass
+
+            matched_line = next(
+                (
+                    line.strip()
+                    for line in page_text.splitlines()
+                    if any(tok in line.lower() for tok in no_data_tokens)
+                ),
+                "",
+            )
+            if matched_line:
+                raise NoDataAvailableError(
+                    f"Portal ExACT sin registros para {date_str}: '{matched_line}'"
+                ) from exc
+
+            if iframe_reloaded:
+                raise NoDataAvailableError(
+                    f"Portal ExACT respondió la consulta para {date_str} sin generar archivo (0 registros)."
+                ) from exc
+
             raise
 
         download = await download_info.value
@@ -507,19 +559,45 @@ class AmanoJaponBot(BaseBot):
                         is_english = await self._detect_menu_language(frame, is_english)
 
                         for report_key, report_info in reports:
-                            file_path = await self._download_report(
-                                popup=popup,
-                                frame=frame,
-                                sede_key=sede_key,
-                                report_key=report_key,
-                                report_info=report_info,
-                                target_date=target_date,
-                                is_english=is_english,
-                                dialogs=dialogs,
-                            )
-                            self._batch_items.append((sede_key, report_key, report_date_obj, file_path))
-                            downloaded_files.append(file_path)
-                            self.log.success(f"[{sede_key.upper()}] CSV guardado en: {file_path}")
+                            try:
+                                file_path = await self._download_report(
+                                    popup=popup,
+                                    frame=frame,
+                                    sede_key=sede_key,
+                                    report_key=report_key,
+                                    report_info=report_info,
+                                    target_date=target_date,
+                                    is_english=is_english,
+                                    dialogs=dialogs,
+                                )
+                                self._batch_items.append((sede_key, report_key, report_date_obj, file_path))
+                                downloaded_files.append(file_path)
+                                self.log.success(f"[{sede_key.upper()}] CSV guardado en: {file_path}")
+                            except NoDataAvailableError as nd_exc:
+                                self.log.warning(f"[{sede_key.upper()} - {report_key.upper()}] {nd_exc}")
+                                SQLServerManager.log_execution(
+                                    bot_name=self.name,
+                                    sede=sede_key,
+                                    reporte=report_key,
+                                    fecha_reporte=report_date_iso,
+                                    filas_insertadas=0,
+                                    estado="SIN_DATOS",
+                                    mensaje_error=str(nd_exc),
+                                )
+                            except Exception as rep_exc:
+                                await self._dump_debug_artifacts(popup, f"{sede_key}_{report_key}")
+                                self.log.error(
+                                    f"[{sede_key.upper()} - {report_key.upper()}] Error en reporte: {rep_exc}"
+                                )
+                                SQLServerManager.log_execution(
+                                    bot_name=self.name,
+                                    sede=sede_key,
+                                    reporte=report_key,
+                                    fecha_reporte=report_date_iso,
+                                    filas_insertadas=0,
+                                    estado="ERROR",
+                                    mensaje_error=str(rep_exc),
+                                )
                     except Exception:
                         await self._dump_debug_artifacts(popup, sede_key)
                         raise

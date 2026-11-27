@@ -210,3 +210,63 @@ class SQLServerManager:
             SQLServerManager.execute_query(sql, params)
         except Exception as exc:
             log.warning(f"No se pudo registrar auditoría en bot_ejecuciones ({sede}/{reporte}): {exc}")
+
+    @classmethod
+    def get_latest_executions(
+        cls,
+        bot_name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> list[dict]:
+        """Devuelve el estado más reciente de cada combinación (bot_name, sede, reporte, fecha_reporte)."""
+        from sqlalchemy import text
+
+        conditions = ["1 = 1"]
+        params: dict[str, object] = {}
+
+        if bot_name and bot_name != "todos":
+            conditions.append("bot_name = :bot_name")
+            params["bot_name"] = bot_name
+        if start_date:
+            conditions.append("fecha_reporte >= :start_date")
+            params["start_date"] = start_date
+        if end_date:
+            conditions.append("fecha_reporte <= :end_date")
+            params["end_date"] = end_date
+
+        where_sql = " AND ".join(conditions)
+        query = text(f"""
+            WITH RankedExecutions AS (
+                SELECT
+                    id,
+                    bot_name,
+                    sede,
+                    reporte,
+                    CONVERT(varchar(10), fecha_reporte, 23) AS fecha_reporte,
+                    filas_insertadas,
+                    estado,
+                    mensaje_error,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY bot_name, sede, reporte, fecha_reporte
+                        ORDER BY id DESC
+                    ) AS rn
+                FROM dbo.bot_ejecuciones
+                WHERE {where_sql}
+            )
+            SELECT
+                bot_name,
+                sede,
+                reporte,
+                fecha_reporte,
+                filas_insertadas,
+                estado,
+                mensaje_error
+            FROM RankedExecutions
+            WHERE rn = 1
+            ORDER BY fecha_reporte ASC, bot_name ASC, sede ASC, reporte ASC
+        """)
+
+        engine = cls.get_engine()  # Ajusta al nombre exacto de tu getter/atributo engine en database.py
+        with engine.connect() as conn:
+            rows = conn.execute(query, params).mappings().all()
+            return [dict(r) for r in rows]
