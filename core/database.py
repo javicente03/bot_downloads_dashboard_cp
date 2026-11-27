@@ -211,16 +211,13 @@ class SQLServerManager:
         except Exception as exc:
             log.warning(f"No se pudo registrar auditoría en bot_ejecuciones ({sede}/{reporte}): {exc}")
 
-    @classmethod
+    @staticmethod
     def get_latest_executions(
-        cls,
         bot_name: str | None = None,
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> list[dict]:
         """Devuelve el estado más reciente de cada combinación (bot_name, sede, reporte, fecha_reporte)."""
-        from sqlalchemy import text
-
         conditions = ["1 = 1"]
         params: dict[str, object] = {}
 
@@ -266,15 +263,8 @@ class SQLServerManager:
             ORDER BY fecha_reporte ASC, bot_name ASC, sede ASC, reporte ASC
         """)
 
-        engine_getter = getattr(cls, "_get_engine", None)
-        engine = (
-            engine_getter()
-            if callable(engine_getter)
-            else (getattr(cls, "_engine", None) or getattr(cls, "engine", None))
-        )
-        if engine is None:
-            raise RuntimeError("No se encontró una instancia de engine activa en SQLServerManager.")
-
-        with engine.connect() as conn:
-            rows = conn.execute(query, params).mappings().all()
+        def _op(connection):
+            rows = connection.execute(query, params).mappings().all()
             return [dict(r) for r in rows]
+
+        return SQLServerManager._run_with_retry(_op)
