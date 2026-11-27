@@ -258,8 +258,20 @@ class SQLServerManager:
                 filas_insertadas,
                 estado,
                 mensaje_error
-            FROM RankedExecutions
-            WHERE rn = 1
+            FROM RankedExecutions r
+            WHERE r.rn = 1
+              AND NOT (
+                  r.reporte = 'todos'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM dbo.bot_ejecuciones newer
+                      WHERE newer.bot_name = r.bot_name
+                        AND newer.sede = r.sede
+                        AND newer.fecha_reporte = r.fecha_reporte
+                        AND newer.reporte <> 'todos'
+                        AND newer.id > r.id
+                  )
+              )
             ORDER BY fecha_reporte ASC, bot_name ASC, sede ASC, reporte ASC
         """)
 
@@ -268,3 +280,30 @@ class SQLServerManager:
             return [dict(r) for r in rows]
 
         return SQLServerManager._run_with_retry(_op)
+
+    @staticmethod
+    def get_completed_keys(
+        start_date: str,
+        end_date: str,
+        bot_name: str | None = None,
+    ) -> tuple[set[tuple[str, str, str, str]], dict[tuple[str, str, str, str], dict]]:
+        """
+        Retorna:
+          1) Conjunto de (bot_name, sede, reporte, fecha_reporte) con último estado OK o SIN_DATOS.
+          2) Diccionario indexado por (bot_name, sede, reporte, fecha_reporte) con la fila más reciente.
+        """
+        rows = SQLServerManager.get_latest_executions(
+            bot_name=bot_name,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        completed: set[tuple[str, str, str, str]] = set()
+        latest_map: dict[tuple[str, str, str, str], dict] = {}
+
+        for row in rows:
+            key = (row["bot_name"], row["sede"], row["reporte"], row["fecha_reporte"])
+            latest_map[key] = row
+            if row["estado"] in ("OK", "SIN_DATOS"):
+                completed.add(key)
+
+        return completed, latest_map

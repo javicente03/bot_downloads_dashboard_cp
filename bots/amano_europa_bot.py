@@ -348,9 +348,22 @@ class AmanoEuropaBot(BaseBot):
         for sede_key, site in sites:
             self.log.info(f"=== Procesando sede: {site['nombre']} ({site['base_url']}) ===")
             if not site["user"] or not site["password"]:
-                self.log.error(f"Credenciales faltantes en .env para '{sede_key}'. Saltando sede.")
+                msg = f"Credenciales faltantes en .env para '{sede_key}'."
+                self.log.error(msg)
+                for report_key, _ in reports:
+                    self.record_error(sede_key, report_key, target_date_iso, msg)
+                    SQLServerManager.log_execution(
+                        bot_name=self.name,
+                        sede=sede_key,
+                        reporte=report_key,
+                        fecha_reporte=target_date_iso,
+                        filas_insertadas=0,
+                        estado="ERROR",
+                        mensaje_error=msg,
+                    )
                 continue
 
+            completed_reports: set[str] = set()
             try:
                 async with BrowserManager.get_page(headless=headless) as page:
                     try:
@@ -370,9 +383,23 @@ class AmanoEuropaBot(BaseBot):
                                 )
                                 self._batch_items.append((sede_key, report_key, file_path))
                                 downloaded_files.append(file_path)
-                            except Exception:
+                                completed_reports.add(report_key)
+                            except Exception as rep_exc:
                                 await self._dump_debug_screenshot(report_page, f"{sede_key}_{report_key}")
-                                raise
+                                self.log.error(
+                                    f"[{sede_key.upper()} - {report_key.upper()}] Error en reporte: {rep_exc}"
+                                )
+                                self.record_error(sede_key, report_key, target_date_iso, str(rep_exc))
+                                SQLServerManager.log_execution(
+                                    bot_name=self.name,
+                                    sede=sede_key,
+                                    reporte=report_key,
+                                    fecha_reporte=target_date_iso,
+                                    filas_insertadas=0,
+                                    estado="ERROR",
+                                    mensaje_error=str(rep_exc),
+                                )
+                                completed_reports.add(report_key)
                             finally:
                                 for p in list(page.context.pages):
                                     if p != page and not p.is_closed():
@@ -381,16 +408,20 @@ class AmanoEuropaBot(BaseBot):
                         await self._dump_debug_screenshot(page, sede_key)
                         raise
             except Exception as exc:
-                self.log.error(f"[{sede_key.upper()}] Error procesando sede: {exc}")
-                SQLServerManager.log_execution(
-                    bot_name=self.name,
-                    sede=sede_key,
-                    reporte="todos",
-                    fecha_reporte=target_date_iso,
-                    filas_insertadas=0,
-                    estado="ERROR",
-                    mensaje_error=str(exc),
-                )
+                self.log.error(f"[{sede_key.upper()}] Error de conexión/sesión en sede: {exc}")
+                for report_key, _ in reports:
+                    if report_key in completed_reports:
+                        continue
+                    self.record_error(sede_key, report_key, target_date_iso, str(exc))
+                    SQLServerManager.log_execution(
+                        bot_name=self.name,
+                        sede=sede_key,
+                        reporte=report_key,
+                        fecha_reporte=target_date_iso,
+                        filas_insertadas=0,
+                        estado="ERROR",
+                        mensaje_error=str(exc),
+                    )
 
         return downloaded_files
 

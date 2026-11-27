@@ -576,14 +576,28 @@ class RedComercioCPSBot(BaseBot):
             self.log.info(f"Modo local activo. Buscando Excel en: {local_dir}")
             return self._discover_local_files(local_dir)
 
-        cfg = settings.redcomercio_cps_config
-        if not cfg["user"] or not cfg["password"]:
-            raise RuntimeError("Faltan REDCOMERCIO_CPS_USER o REDCOMERCIO_CPS_PASS en .env.")
-
         reports = self._resolve_reports()
         target_date = self._resolve_target_date()
         report_date_iso = target_date.strftime("%Y-%m-%d")
+
+        cfg = settings.redcomercio_cps_config
+        if not cfg["user"] or not cfg["password"]:
+            msg = "Faltan REDCOMERCIO_CPS_USER o REDCOMERCIO_CPS_PASS en .env."
+            for report_key, _ in reports:
+                self.record_error(self.name, report_key, report_date_iso, msg)
+                SQLServerManager.log_execution(
+                    bot_name=self.name,
+                    sede=self.name,
+                    reporte=report_key,
+                    fecha_reporte=report_date_iso,
+                    filas_insertadas=0,
+                    estado="ERROR",
+                    mensaje_error=msg,
+                )
+            raise RuntimeError(msg)
+
         downloaded_files: list[Path] = []
+        handled_reports: set[str] = set()
 
         headless_param = self.params.get("headless")
         headless = None if headless_param is None else headless_param.lower() == "true"
@@ -593,25 +607,45 @@ class RedComercioCPSBot(BaseBot):
                 await self._login(page, cfg["login_url"], cfg["user"], cfg["password"])
 
                 for report_key, report_info in reports:
-                    file_path = await self._export_report(
-                        page=page,
-                        base_url=cfg["base_url"],
-                        report_key=report_key,
-                        report_info=report_info,
-                        target_date=target_date,
-                    )
-                    downloaded_files.append(file_path)
+                    try:
+                        file_path = await self._export_report(
+                            page=page,
+                            base_url=cfg["base_url"],
+                            report_key=report_key,
+                            report_info=report_info,
+                            target_date=target_date,
+                        )
+                        downloaded_files.append(file_path)
+                        handled_reports.add(report_key)
+                    except Exception as rep_exc:
+                        handled_reports.add(report_key)
+                        await self._dump_debug_screenshot(page, f"{report_key}_error")
+                        self.log.error(f"[{report_key.upper()}] Error exportando reporte: {rep_exc}")
+                        self.record_error(self.name, report_key, report_date_iso, str(rep_exc))
+                        SQLServerManager.log_execution(
+                            bot_name=self.name,
+                            sede=self.name,
+                            reporte=report_key,
+                            fecha_reporte=report_date_iso,
+                            filas_insertadas=0,
+                            estado="ERROR",
+                            mensaje_error=str(rep_exc),
+                        )
             except Exception as exc:
                 await self._dump_debug_screenshot(page, "general")
-                SQLServerManager.log_execution(
-                    bot_name=self.name,
-                    sede=self.name,
-                    reporte="todos",
-                    fecha_reporte=report_date_iso,
-                    filas_insertadas=0,
-                    estado="ERROR",
-                    mensaje_error=str(exc),
-                )
+                for report_key, _ in reports:
+                    if report_key in handled_reports:
+                        continue
+                    self.record_error(self.name, report_key, report_date_iso, str(exc))
+                    SQLServerManager.log_execution(
+                        bot_name=self.name,
+                        sede=self.name,
+                        reporte=report_key,
+                        fecha_reporte=report_date_iso,
+                        filas_insertadas=0,
+                        estado="ERROR",
+                        mensaje_error=str(exc),
+                    )
                 raise
 
         return downloaded_files

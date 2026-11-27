@@ -536,11 +536,24 @@ class AmanoJaponBot(BaseBot):
         for sede_key, site in sites:
             self.log.info(f"=== Procesando sede: {site['nombre']} ({site['login_url']}) ===")
             if not site["user"] or not site["password"]:
-                self.log.error(f"Credenciales faltantes en .env para '{sede_key}'. Saltando sede.")
+                msg = f"Credenciales faltantes en .env para '{sede_key}'."
+                self.log.error(msg)
+                for report_key, _ in reports:
+                    self.record_error(sede_key, report_key, report_date_iso, msg)
+                    SQLServerManager.log_execution(
+                        bot_name=self.name,
+                        sede=sede_key,
+                        reporte=report_key,
+                        fecha_reporte=report_date_iso,
+                        filas_insertadas=0,
+                        estado="ERROR",
+                        mensaje_error=msg,
+                    )
                 continue
 
             popup: Page | None = None
             dialogs: list[str] = []
+            handled_reports: set[str] = set()
 
             try:
                 async with BrowserManager.get_page(headless=headless) as page:
@@ -572,8 +585,10 @@ class AmanoJaponBot(BaseBot):
                                 )
                                 self._batch_items.append((sede_key, report_key, report_date_obj, file_path))
                                 downloaded_files.append(file_path)
+                                handled_reports.add(report_key)
                                 self.log.success(f"[{sede_key.upper()}] CSV guardado en: {file_path}")
                             except NoDataAvailableError as nd_exc:
+                                handled_reports.add(report_key)
                                 self.log.warning(f"[{sede_key.upper()} - {report_key.upper()}] {nd_exc}")
                                 SQLServerManager.log_execution(
                                     bot_name=self.name,
@@ -585,10 +600,12 @@ class AmanoJaponBot(BaseBot):
                                     mensaje_error=str(nd_exc),
                                 )
                             except Exception as rep_exc:
+                                handled_reports.add(report_key)
                                 await self._dump_debug_artifacts(popup, f"{sede_key}_{report_key}")
                                 self.log.error(
                                     f"[{sede_key.upper()} - {report_key.upper()}] Error en reporte: {rep_exc}"
                                 )
+                                self.record_error(sede_key, report_key, report_date_iso, str(rep_exc))
                                 SQLServerManager.log_execution(
                                     bot_name=self.name,
                                     sede=sede_key,
@@ -606,15 +623,19 @@ class AmanoJaponBot(BaseBot):
                             await popup.close()
             except Exception as exc:
                 self.log.error(f"[{sede_key.upper()}] Error procesando sede: {exc}")
-                SQLServerManager.log_execution(
-                    bot_name=self.name,
-                    sede=sede_key,
-                    reporte="todos",
-                    fecha_reporte=report_date_iso,
-                    filas_insertadas=0,
-                    estado="ERROR",
-                    mensaje_error=str(exc),
-                )
+                for report_key, _ in reports:
+                    if report_key in handled_reports:
+                        continue
+                    self.record_error(sede_key, report_key, report_date_iso, str(exc))
+                    SQLServerManager.log_execution(
+                        bot_name=self.name,
+                        sede=sede_key,
+                        reporte=report_key,
+                        fecha_reporte=report_date_iso,
+                        filas_insertadas=0,
+                        estado="ERROR",
+                        mensaje_error=str(exc),
+                    )
 
         return downloaded_files
 

@@ -5,7 +5,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from bots import BOT_REGISTRY
+from config.settings import settings
+from core.base_bot import BotPartialError
 from core.database import SQLServerManager
+from core.notifier import SMTPNotifier
 
 app = typer.Typer(help="Orquestador de Robots de Scraping hacia SQL Server")
 console = Console()
@@ -29,6 +32,58 @@ def _resolve_target_bots(bot: str) -> list[str]:
         console.print(f"[bold red]Error:[/bold red] El robot '{bot}' no existe. Usa 'python main.py list'.")
         raise typer.Exit(code=1)
     return [bot]
+
+
+def _build_bot_params(
+    bot_name: str,
+    fecha_iso: str,
+    sede_val: str,
+    reporte_val: str,
+    headless: str,
+) -> dict[str, str]:
+    params: dict[str, str] = {"fecha": fecha_iso, "headless": headless}
+    if bot_name in ("amano_japon", "amano_europa") and sede_val not in ("todas", bot_name):
+        params["sede"] = sede_val
+    if reporte_val != "todos":
+        params["reporte"] = reporte_val
+    return params
+
+
+def _optimize_pending_tasks(
+    pending_items: list[tuple[str, str, str, str]],
+) -> list[tuple[str, str, str, str]]:
+    """
+    Agrupa combinaciones pendientes (fecha_iso, bot_name, sede, reporte) para evitar
+    abrir múltiples navegadores innecesarios en un mismo día/sede.
+    """
+    expected_by_bot: dict[str, set[tuple[str, str]]] = {}
+    expected_by_bot_sede: dict[tuple[str, str], set[str]] = {}
+    for b_name, s_name, r_name in settings.expected_pipeline_matrix:
+        expected_by_bot.setdefault(b_name, set()).add((s_name, r_name))
+        expected_by_bot_sede.setdefault((b_name, s_name), set()).add(r_name)
+
+    grouped_day_bot: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for fecha_iso, bot_name, sede, reporte in pending_items:
+        grouped_day_bot.setdefault((fecha_iso, bot_name), set()).add((sede, reporte))
+
+    optimized: list[tuple[str, str, str, str]] = []
+    for (fecha_iso, bot_name), pairs in sorted(grouped_day_bot.items()):
+        if pairs == expected_by_bot.get(bot_name, set()):
+            optimized.append((fecha_iso, bot_name, "todas", "todos"))
+            continue
+
+        by_sede: dict[str, set[str]] = {}
+        for s_name, r_name in pairs:
+            by_sede.setdefault(s_name, set()).add(r_name)
+
+        for s_name, reps in sorted(by_sede.items()):
+            if reps == expected_by_bot_sede.get((bot_name, s_name), set()):
+                optimized.append((fecha_iso, bot_name, s_name, "todos"))
+            else:
+                for r_name in sorted(reps):
+                    optimized.append((fecha_iso, bot_name, s_name, r_name))
+
+    return optimized
 
 
 @app.command("list")
@@ -56,7 +111,7 @@ def run_bot(
     keep_files: bool = typer.Option(
         True,
         "--keep-files/--delete-files",
-        help="Conservar o eliminar archivos descargados tras subir a SQL Server (por defecto se conservan)",
+        help="Conservar o eliminar archivos descargados tras subir a SQL Server",
     ),
 ):
     """Ejecuta un robot específico pasándole parámetros opcionales."""
@@ -67,6 +122,144 @@ def run_bot(
     parsed_params = parse_extra_params(param)
     bot_instance = BOT_REGISTRY[bot](params=parsed_params)
     asyncio.run(bot_instance.run(keep_files=keep_files))
+
+
+@app.command("auto-sync")
+def auto_sync(
+    bot: str = typer.Option("todos", "--bot", "-b", help="Robot específico o 'todos'"),
+    lookback_days: int = typer.Option(
+        settings.AUTO_RETRY_LOOKBACK_DAYS,
+        "--lookback-days",
+        "-d",
+        help="Días hacia atrás desde ayer a auditar y sincronizar (incluye ayer)",
+    ),
+    headless: str = typer.Option("true", "--headless", help="true o false"),
+    delay: float = typer.Option(2.0, "--delay", help="Segundos de pausa entre ejecuciones"),
+    keep_files: bool = typer.Option(True, "--keep-files/--delete-files"),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Muestra qué fechas/sedes/reportes están pendientes sin ejecutar los bots",
+    ),
+    notify: bool = typer.Option(
+        True,
+        "--notify/--no-notify",
+        help="Enviar alerta por correo SMTP si persisten fallos al finalizar",
+    ),
+):
+    """
+    Comando diario inteligente: procesa ayer y reprocesa automáticamente cualquier
+    día/sede/reporte en ERROR o no ejecutado dentro de la ventana lookback_days.
+    """
+    if lookback_days < 1:
+        raise typer.BadParameter("--lookback-days debe ser mayor o igual a 1")
+
+    target_bots = set(_resolve_target_bots(bot))
+    yesterday = datetime.now().date() - timedelta(days=1)
+    start_day = yesterday - timedelta(days=lookback_days - 1)
+
+    start_iso = start_day.isoformat()
+    end_iso = yesterday.isoformat()
+
+    SQLServerManager.check_connection()
+    completed_keys, latest_map = SQLServerManager.get_completed_keys(
+        start_date=start_iso,
+        end_date=end_iso,
+        bot_name=None if bot == "todos" else bot,
+    )
+
+    # Construye matriz esperada para los días [start_day ... yesterday]
+    pending_items: list[tuple[str, str, str, str]] = []
+    for offset in range(lookback_days):
+        day_iso = (start_day + timedelta(days=offset)).isoformat()
+        for b_name, s_name, r_name in settings.expected_pipeline_matrix:
+            if b_name not in target_bots:
+                continue
+            key = (b_name, s_name, r_name, day_iso)
+            if key not in completed_keys:
+                pending_items.append((day_iso, b_name, s_name, r_name))
+
+    if not pending_items:
+        console.print(
+            f"[bold green]Todo al día ({start_iso} -> {end_iso}). "
+            f"Sin días pendientes ni errores.[/bold green]"
+        )
+        return
+
+    table = Table(title=f"Pendientes detectados ({start_iso} -> {end_iso}): {len(pending_items)} reporte(s)")
+    table.add_column("Fecha", style="yellow")
+    table.add_column("Bot", style="cyan")
+    table.add_column("Sede")
+    table.add_column("Reporte")
+    table.add_column("Motivo", style="magenta")
+
+    for day_iso, b_name, s_name, r_name in pending_items:
+        prev = latest_map.get((b_name, s_name, r_name, day_iso))
+        if prev:
+            reason = f"ERROR previo: {(prev.get('mensaje_error') or '')[:60]}"
+        else:
+            reason = "SIN EJECUTAR (día nuevo o caído)"
+        table.add_row(day_iso, b_name, s_name, r_name, reason)
+    console.print(table)
+
+    if dry_run:
+        console.print("[bold yellow]Modo --dry-run activo. No se ejecutó ningún robot.[/bold yellow]")
+        return
+
+    tasks = _optimize_pending_tasks(pending_items)
+    console.print(f"[bold cyan]Ejecutando {len(tasks)} lote(s) optimizado(s)...[/bold cyan]")
+
+    for idx, (day_iso, bot_name, sede_val, reporte_val) in enumerate(tasks, start=1):
+        console.rule(
+            f"[bold]Lote {idx}/{len(tasks)} — {day_iso} | {bot_name} | sede={sede_val} | reporte={reporte_val}[/bold]"
+        )
+        params = _build_bot_params(bot_name, day_iso, sede_val, reporte_val, headless)
+        try:
+            bot_instance = BOT_REGISTRY[bot_name](params=params)
+            asyncio.run(bot_instance.run(keep_files=keep_files))
+        except BotPartialError as p_exc:
+            console.print(f"[bold yellow]Ejecución con errores parciales:[/bold yellow] {p_exc}")
+        except Exception as exc:
+            console.print(f"[bold red]Fallo en {bot_name} ({day_iso}):[/bold red] {exc}")
+
+        if idx < len(tasks) and delay > 0:
+            time.sleep(delay)
+
+    # Auditoría post-ejecución para verificar qué quedó sin resolver y notificar por SMTP
+    completed_after, latest_after = SQLServerManager.get_completed_keys(
+        start_date=start_iso,
+        end_date=end_iso,
+        bot_name=None if bot == "todos" else bot,
+    )
+
+    unresolved: list[dict[str, str]] = []
+    for day_iso, b_name, s_name, r_name in pending_items:
+        key = (b_name, s_name, r_name, day_iso)
+        if key not in completed_after:
+            row_info = latest_after.get(key) or {}
+            unresolved.append({
+                "fecha_reporte": day_iso,
+                "bot_name": b_name,
+                "sede": s_name,
+                "reporte": r_name,
+                "mensaje_error": row_info.get("mensaje_error") or "No se completó la descarga/carga",
+            })
+
+    console.rule("[bold green]Resumen Auto-Sync[/bold green]")
+    resolved_count = len(pending_items) - len(unresolved)
+    console.print(
+        f"Pendientes iniciales: {len(pending_items)} | "
+        f"Resueltos: [green]{resolved_count}[/green] | "
+        f"Aún pendientes: [red]{len(unresolved)}[/red]"
+    )
+
+    if unresolved:
+        if notify:
+            SMTPNotifier.send_failure_alert(
+                failures=unresolved,
+                context_title=f"auto-sync ({start_iso} -> {end_iso})",
+            )
+        raise typer.Exit(code=1)
 
 
 @app.command("backfill")
@@ -94,23 +287,18 @@ def backfill_range(
     target_bots = _resolve_target_bots(bot)
     total_days = (end_dt - start_dt).days + 1
 
-    completed_index: set[tuple[str, str]] = set()
+    completed_keys: set[tuple[str, str, str, str]] = set()
     if skip_completed:
         SQLServerManager.check_connection()
-        latest_rows = SQLServerManager.get_latest_executions(
-            bot_name=None if bot == "todos" else bot,
+        completed_keys, _ = SQLServerManager.get_completed_keys(
             start_date=desde,
             end_date=hasta,
+            bot_name=None if bot == "todos" else bot,
         )
-        # Agrupa por (bot_name, fecha_reporte) si no tiene ningún ERROR pendiente
-        by_bot_date: dict[tuple[str, str], list[str]] = {}
-        for row in latest_rows:
-            key = (row["bot_name"], row["fecha_reporte"])
-            by_bot_date.setdefault(key, []).append(row["estado"])
 
-        for key, states in by_bot_date.items():
-            if states and all(st in ("OK", "SIN_DATOS") for st in states):
-                completed_index.add(key)
+    expected_by_bot: dict[str, list[tuple[str, str]]] = {}
+    for b_name, s_name, r_name in settings.expected_pipeline_matrix:
+        expected_by_bot.setdefault(b_name, []).append((s_name, r_name))
 
     console.print(
         f"[bold cyan]Iniciando Backfill:[/bold cyan] {desde} -> {hasta} ({total_days} días) | "
@@ -127,17 +315,19 @@ def backfill_range(
         console.rule(f"[bold]Día {offset + 1}/{total_days} — {day_iso}[/bold]")
 
         for bot_name in target_bots:
-            if skip_completed and sede == "todas" and reporte == "todos" and (bot_name, day_iso) in completed_index:
-                console.print(f"[dim]Saltando {bot_name} ({day_iso}): ya registrado como OK/SIN_DATOS.[/dim]")
+            bot_matrix = expected_by_bot.get(bot_name, [])
+            if (
+                skip_completed
+                and sede == "todas"
+                and reporte == "todos"
+                and bot_matrix
+                and all((bot_name, s, r, day_iso) in completed_keys for s, r in bot_matrix)
+            ):
+                console.print(f"[dim]Saltando {bot_name} ({day_iso}): todas sus sedes/reportes ya OK/SIN_DATOS.[/dim]")
                 skipped_count += 1
                 continue
 
-            params: dict[str, str] = {"fecha": day_iso, "headless": headless}
-            if sede != "todas" and bot_name in ("amano_japon", "amano_europa"):
-                params["sede"] = sede
-            if reporte != "todos":
-                params["reporte"] = reporte
-
+            params = _build_bot_params(bot_name, day_iso, sede, reporte, headless)
             try:
                 bot_instance = BOT_REGISTRY[bot_name](params=params)
                 asyncio.run(bot_instance.run(keep_files=keep_files))
@@ -163,6 +353,7 @@ def retry_errors(
     fecha: str = typer.Option("", "--fecha", help="Reprocesar errores solo de una fecha YYYY-MM-DD (opcional)"),
     headless: str = typer.Option("true", "--headless", help="true o false"),
     keep_files: bool = typer.Option(True, "--keep-files/--delete-files"),
+    notify: bool = typer.Option(True, "--notify/--no-notify", help="Enviar alerta SMTP si vuelven a fallar"),
 ):
     """Consulta dbo.bot_ejecuciones y reprocesa únicamente los ítems cuyo último estado sea ERROR."""
     if bot != "todos":
@@ -200,7 +391,6 @@ def retry_errors(
         table.add_row(r["bot_name"], r["sede"], r["reporte"], r["fecha_reporte"], (r["mensaje_error"] or "")[:80])
     console.print(table)
 
-    # Deduplica combinaciones (bot_name, sede, reporte, fecha_reporte)
     tasks: list[tuple[str, str, str, str]] = []
     seen: set[tuple[str, str, str, str]] = set()
     for r in error_rows:
@@ -211,17 +401,35 @@ def retry_errors(
 
     for idx, (bot_name, sede_val, reporte_val, fecha_val) in enumerate(tasks, start=1):
         console.rule(f"[bold yellow]Reintento {idx}/{len(tasks)}: {bot_name} | {sede_val} | {reporte_val} | {fecha_val}[/bold yellow]")
-        params: dict[str, str] = {"fecha": fecha_val, "headless": headless}
-        if bot_name in ("amano_japon", "amano_europa") and sede_val not in ("todas", bot_name):
-            params["sede"] = sede_val
-        if reporte_val != "todos":
-            params["reporte"] = reporte_val
-
+        params = _build_bot_params(bot_name, fecha_val, sede_val, reporte_val, headless)
         try:
             bot_instance = BOT_REGISTRY[bot_name](params=params)
             asyncio.run(bot_instance.run(keep_files=keep_files))
         except Exception as exc:
             console.print(f"[bold red]Reintento fallido ({bot_name} - {fecha_val}):[/bold red] {exc}")
+
+    # Verifica si tras el reintento siguen quedando errores
+    after_rows = SQLServerManager.get_latest_executions(
+        bot_name=None if bot == "todos" else bot,
+        start_date=start_iso,
+        end_date=end_iso,
+    )
+    still_failing = [
+        {
+            "fecha_reporte": r["fecha_reporte"],
+            "bot_name": r["bot_name"],
+            "sede": r["sede"],
+            "reporte": r["reporte"],
+            "mensaje_error": r["mensaje_error"] or "Error persistente",
+        }
+        for r in after_rows
+        if r["estado"] == "ERROR" and r["bot_name"] in BOT_REGISTRY
+    ]
+    if still_failing and notify:
+        SMTPNotifier.send_failure_alert(
+            failures=still_failing,
+            context_title=f"retry-errors ({start_iso} -> {end_iso})",
+        )
 
 
 if __name__ == "__main__":

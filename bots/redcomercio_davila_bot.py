@@ -440,14 +440,25 @@ class RedComercioDavilaBot(BaseBot):
             self.log.info(f"Modo local activo. Buscando Excel en: {local_dir}")
             return self._discover_local_files(local_dir)
 
-        cfg = settings.redcomercio_davila_config
-        if not cfg["user"] or not cfg["password"]:
-            raise RuntimeError("Faltan REDCOMERCIO_DAVILA_USER o REDCOMERCIO_DAVILA_PASS en .env.")
-
         target_date = self._resolve_target_date()
         report_date_iso = target_date.strftime("%Y-%m-%d")
-        downloaded_files: list[Path] = []
 
+        cfg = settings.redcomercio_davila_config
+        if not cfg["user"] or not cfg["password"]:
+            msg = "Faltan REDCOMERCIO_DAVILA_USER o REDCOMERCIO_DAVILA_PASS en .env."
+            self.record_error(self.name, "pagos", report_date_iso, msg)
+            SQLServerManager.log_execution(
+                bot_name=self.name,
+                sede=self.name,
+                reporte="pagos",
+                fecha_reporte=report_date_iso,
+                filas_insertadas=0,
+                estado="ERROR",
+                mensaje_error=msg,
+            )
+            raise RuntimeError(msg)
+
+        downloaded_files: list[Path] = []
         headless_param = self.params.get("headless")
         headless = None if headless_param is None else headless_param.lower() == "true"
 
@@ -458,6 +469,7 @@ class RedComercioDavilaBot(BaseBot):
                 downloaded_files.append(file_path)
             except Exception as exc:
                 await self._dump_debug_screenshot(page, "general")
+                self.record_error(self.name, "pagos", report_date_iso, str(exc))
                 SQLServerManager.log_execution(
                     bot_name=self.name,
                     sede=self.name,

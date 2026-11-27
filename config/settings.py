@@ -34,6 +34,19 @@ class Settings(BaseSettings):
 
     HEADLESS: bool = True
     DOWNLOAD_TIMEOUT_MS: int = 60000
+    AUTO_RETRY_LOOKBACK_DAYS: int = 7
+
+    # Configuración SMTP para alertas
+    SMTP_ENABLED: bool = False
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USE_TLS: bool = True
+    SMTP_USE_SSL: bool = False
+    SMTP_USER: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_TO: str = ""
+    SMTP_ONLY_EXTERNAL: bool = False
 
     # Credenciales Amano Europa (XOffice)
     XOFFICE_PICHIMAPU_USER: str = ""
@@ -71,6 +84,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @property
+    def smtp_recipients(self) -> list[str]:
+        return [addr.strip() for addr in self.SMTP_TO.split(",") if addr.strip()]
 
     @property
     def resolved_db_driver(self) -> str:
@@ -170,6 +187,21 @@ class Settings(BaseSettings):
             "user": self.REDCOMERCIO_DAVILA_USER,
             "password": self.REDCOMERCIO_DAVILA_PASS,
         }
+
+    @property
+    def expected_pipeline_matrix(self) -> list[tuple[str, str, str]]:
+        """Retorna las 22 combinaciones exactas (bot_name, sede, reporte) esperadas por día."""
+        matrix: list[tuple[str, str, str]] = []
+        for sede_key in self.amano_europa_sites:
+            for rep in ("tickets", "ventas", "descuentos"):
+                matrix.append(("amano_europa", sede_key, rep))
+        for sede_key in self.amano_japon_sites:
+            for rep in ("transacciones", "tracking"):
+                matrix.append(("amano_japon", sede_key, rep))
+        for rep in ("pagos", "transacciones"):
+            matrix.append(("redcomercio_cps", "redcomercio_cps", rep))
+        matrix.append(("redcomercio_davila", "redcomercio_davila", "pagos"))
+        return matrix
 
 
 settings = Settings()
