@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     SMTP_FROM: str = ""
     SMTP_TO: str = ""
     SMTP_ONLY_EXTERNAL: bool = False
+    SMTP_SEND_ON_SUCCESS: bool = True
 
     # Credenciales Amano Europa (XOffice)
     XOFFICE_PICHIMAPU_USER: str = ""

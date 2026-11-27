@@ -144,7 +144,7 @@ def auto_sync(
     notify: bool = typer.Option(
         True,
         "--notify/--no-notify",
-        help="Enviar alerta por correo SMTP si persisten fallos al finalizar",
+        help="Enviar informe por correo SMTP al finalizar la ejecución",
     ),
 ):
     """
@@ -154,6 +154,7 @@ def auto_sync(
     if lookback_days < 1:
         raise typer.BadParameter("--lookback-days debe ser mayor o igual a 1")
 
+    started_at = time.monotonic()
     target_bots = set(_resolve_target_bots(bot))
     yesterday = datetime.now().date() - timedelta(days=1)
     start_day = yesterday - timedelta(days=lookback_days - 1)
@@ -168,22 +169,36 @@ def auto_sync(
         bot_name=None if bot == "todos" else bot,
     )
 
-    # Construye matriz esperada para los días [start_day ... yesterday]
+    total_expected = 0
     pending_items: list[tuple[str, str, str, str]] = []
     for offset in range(lookback_days):
         day_iso = (start_day + timedelta(days=offset)).isoformat()
         for b_name, s_name, r_name in settings.expected_pipeline_matrix:
             if b_name not in target_bots:
                 continue
+            total_expected += 1
             key = (b_name, s_name, r_name, day_iso)
             if key not in completed_keys:
                 pending_items.append((day_iso, b_name, s_name, r_name))
 
+    already_ok_count = total_expected - len(pending_items)
+
     if not pending_items:
+        elapsed = time.monotonic() - started_at
         console.print(
             f"[bold green]Todo al día ({start_iso} -> {end_iso}). "
             f"Sin días pendientes ni errores.[/bold green]"
         )
+        if notify and not dry_run:
+            SMTPNotifier.send_execution_report(
+                window_start=start_iso,
+                window_end=end_iso,
+                total_expected=total_expected,
+                already_ok_count=already_ok_count,
+                resolved_items=[],
+                unresolved_items=[],
+                duration_seconds=elapsed,
+            )
         return
 
     table = Table(title=f"Pendientes detectados ({start_iso} -> {end_iso}): {len(pending_items)} reporte(s)")
@@ -225,19 +240,30 @@ def auto_sync(
         if idx < len(tasks) and delay > 0:
             time.sleep(delay)
 
-    # Auditoría post-ejecución para verificar qué quedó sin resolver y notificar por SMTP
+    # Auditoría post-ejecución para armar el informe completo
     completed_after, latest_after = SQLServerManager.get_completed_keys(
         start_date=start_iso,
         end_date=end_iso,
         bot_name=None if bot == "todos" else bot,
     )
 
-    unresolved: list[dict[str, str]] = []
+    resolved_items: list[dict[str, object]] = []
+    unresolved_items: list[dict[str, str]] = []
+
     for day_iso, b_name, s_name, r_name in pending_items:
         key = (b_name, s_name, r_name, day_iso)
-        if key not in completed_after:
-            row_info = latest_after.get(key) or {}
-            unresolved.append({
+        row_info = latest_after.get(key) or {}
+        if key in completed_after:
+            resolved_items.append({
+                "fecha_reporte": day_iso,
+                "bot_name": b_name,
+                "sede": s_name,
+                "reporte": r_name,
+                "estado": row_info.get("estado") or "OK",
+                "filas_insertadas": row_info.get("filas_insertadas") or 0,
+            })
+        else:
+            unresolved_items.append({
                 "fecha_reporte": day_iso,
                 "bot_name": b_name,
                 "sede": s_name,
@@ -245,20 +271,27 @@ def auto_sync(
                 "mensaje_error": row_info.get("mensaje_error") or "No se completó la descarga/carga",
             })
 
+    elapsed = time.monotonic() - started_at
     console.rule("[bold green]Resumen Auto-Sync[/bold green]")
-    resolved_count = len(pending_items) - len(unresolved)
     console.print(
         f"Pendientes iniciales: {len(pending_items)} | "
-        f"Resueltos: [green]{resolved_count}[/green] | "
-        f"Aún pendientes: [red]{len(unresolved)}[/red]"
+        f"Resueltos: [green]{len(resolved_items)}[/green] | "
+        f"Aún pendientes: [red]{len(unresolved_items)}[/red] | "
+        f"Tiempo: {elapsed:.1f}s"
     )
 
-    if unresolved:
-        if notify:
-            SMTPNotifier.send_failure_alert(
-                failures=unresolved,
-                context_title=f"auto-sync ({start_iso} -> {end_iso})",
-            )
+    if notify:
+        SMTPNotifier.send_execution_report(
+            window_start=start_iso,
+            window_end=end_iso,
+            total_expected=total_expected,
+            already_ok_count=already_ok_count,
+            resolved_items=resolved_items,
+            unresolved_items=unresolved_items,
+            duration_seconds=elapsed,
+        )
+
+    if unresolved_items:
         raise typer.Exit(code=1)
 
 
