@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import unicodedata
 import polars as pl
-from playwright.async_api import Page
+from playwright.async_api import Locator, Page
 from config.settings import settings
 from core.base_bot import BaseBot
 from core.browser import BrowserManager
@@ -29,6 +29,25 @@ REPORTS_CONFIG: dict[str, dict[str, str]] = {
         "path": "/xoffice/index.php?mod=report&page=salesdiscount&menu_select=1",
         "table": "amano_europa_descuentos",
         "date_col": "fecha_reporte",
+    },
+}
+
+# Mapa (sede -> reporte -> (start_input_id, end_input_id)) en XOffice
+DATE_INPUTS_CONFIG: dict[str, dict[str, tuple[str, str]]] = {
+    "pichimapu": {
+        "ventas": ("84783654c993bddf5c10b0be2e250058_date", "d510f9ac8a8008c4da2d2e36f7840e1e_date"),
+        "tickets": ("26486473f3d59ae7bc7b86b9e4390ea2_date", "54d5f1898139aafd330a84ae3e1edf31_date"),
+        "descuentos": ("3dab292151dd7c9f52c2bdd42c993710_date", "1362f0581e7a2a359cf28918b76b04b0_date"),
+    },
+    "indisa": {
+        "ventas": ("84783654c993bddf5c10b0be2e250058_date", "d510f9ac8a8008c4da2d2e36f7840e1e_date"),
+        "tickets": ("26486473f3d59ae7bc7b86b9e4390ea2_date", "54d5f1898139aafd330a84ae3e1edf31_date"),
+        "descuentos": ("3dab292151dd7c9f52c2bdd42c993710_date", "1362f0581e7a2a359cf28918b76b04b0_date"),
+    },
+    "recoleta": {
+        "ventas": ("968d00eb938e673ff9dba3e14e8dfe0a_date", "6e23be3e195c1150d80ce2457ae8bbd0_date"),
+        "tickets": ("26486473f3d59ae7bc7b86b9e4390ea2_date", "54d5f1898139aafd330a84ae3e1edf31_date"),
+        "descuentos": ("3dab292151dd7c9f52c2bdd42c993710_date", "1362f0581e7a2a359cf28918b76b04b0_date"),
     },
 }
 
@@ -138,6 +157,60 @@ class AmanoEuropaBot(BaseBot):
             raise ValueError(f"Reporte '{reporte_param}' no válido. Opciones: {valid}")
         return [(reporte_param, REPORTS_CONFIG[reporte_param])]
 
+    def _resolve_target_date(self) -> datetime:
+        fecha_param = self.params.get("fecha", "").strip()
+        if fecha_param:
+            return datetime.strptime(fecha_param, "%Y-%m-%d")
+        return datetime.now() - timedelta(days=1)
+
+    async def _format_xoffice_date(self, locator: Locator, target_date: datetime) -> str:
+        custom_fmt = self.params.get("date_fmt", "").strip()
+        if custom_fmt:
+            return target_date.strftime(custom_fmt)
+
+        meta = await locator.evaluate(
+            """el => {
+                let jqFmt = '';
+                if (window.jQuery && window.jQuery(el).data('datepicker')) {
+                    try {
+                        jqFmt = window.jQuery(el).datepicker('option', 'dateFormat') || '';
+                    } catch (e) {}
+                }
+                return {
+                    val: el.value || '',
+                    placeholder: el.getAttribute('placeholder') || '',
+                    jqFmt: jqFmt,
+                };
+            }"""
+        )
+        sample = meta["val"] or meta["placeholder"]
+        jq_fmt = meta["jqFmt"].lower()
+
+        if re.match(r"^\d{4}-\d{2}-\d{2}", sample) or jq_fmt.startswith("yy-"):
+            return target_date.strftime("%Y-%m-%d")
+        if "/" in sample or "/" in jq_fmt:
+            return target_date.strftime("%d/%m/%Y")
+        return target_date.strftime("%d-%m-%Y")
+
+    async def _set_xoffice_date(self, locator: Locator, date_str: str) -> None:
+        await locator.wait_for(state="visible")
+        await locator.fill(date_str)
+        await locator.evaluate(
+            """(el, val) => {
+                el.value = val;
+                if (window.jQuery && window.jQuery(el).data('datepicker')) {
+                    try {
+                        window.jQuery(el).datepicker('setDate', val);
+                        window.jQuery(el).datepicker('hide');
+                    } catch (e) {}
+                }
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('blur', { bubbles: true }));
+            }""",
+            date_str,
+        )
+
     async def _login(self, page: Page, base_url: str, user: str, password: str) -> None:
         login_url = f"{base_url}/xoffice/index.php"
         self.log.info(f"Accediendo a {login_url}...")
@@ -163,16 +236,27 @@ class AmanoEuropaBot(BaseBot):
         base_url: str,
         report_key: str,
         report_info: dict[str, str],
+        target_date: datetime,
     ) -> Path:
         full_url = f"{base_url}{report_info['path']}"
         self.log.info(f"[{sede_key.upper()}] Navegando a {report_info['label']}...")
         await page.goto(full_url, wait_until="networkidle")
 
-        # Clic en botón "Ayer" (#obj_5) y luego "Buscar" (#obj_2)
-        await page.wait_for_selector("#obj_5", state="visible")
-        await page.click("#obj_5")
-        await page.wait_for_timeout(500)
+        start_id, end_id = DATE_INPUTS_CONFIG[sede_key][report_key]
+        start_input = page.locator(f'[id="{start_id}"]')
+        end_input = page.locator(f'[id="{end_id}"]')
 
+        await start_input.wait_for(state="visible")
+        await end_input.wait_for(state="visible")
+
+        date_str = await self._format_xoffice_date(start_input, target_date)
+        self.log.info(f"[{sede_key.upper()}] Aplicando rango de fecha: {date_str} -> {date_str}")
+
+        await self._set_xoffice_date(start_input, date_str)
+        await self._set_xoffice_date(end_input, date_str)
+        await page.wait_for_timeout(300)
+
+        # Clic en "Buscar" (#obj_2)
         await page.click("#obj_2")
         await page.wait_for_load_state("networkidle")
 
@@ -202,7 +286,7 @@ class AmanoEuropaBot(BaseBot):
                 await export_page.click("#obj_4")
 
             download = await download_info.value
-            date_folder = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            date_folder = target_date.strftime("%Y-%m-%d")
             filename = f"{sede_key}_{report_key}_{date_folder}.csv"
             saved_path = await BrowserManager.save_download(
                 download=download,
@@ -254,8 +338,9 @@ class AmanoEuropaBot(BaseBot):
 
         sites = self._resolve_sites()
         reports = self._resolve_reports()
+        target_date = self._resolve_target_date()
+        target_date_iso = target_date.strftime("%Y-%m-%d")
         downloaded_files: list[Path] = []
-        yesterday_iso = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         headless_param = self.params.get("headless")
         headless = None if headless_param is None else headless_param.lower() == "true"
@@ -281,6 +366,7 @@ class AmanoEuropaBot(BaseBot):
                                     base_url=site["base_url"],
                                     report_key=report_key,
                                     report_info=report_info,
+                                    target_date=target_date,
                                 )
                                 self._batch_items.append((sede_key, report_key, file_path))
                                 downloaded_files.append(file_path)
@@ -300,7 +386,7 @@ class AmanoEuropaBot(BaseBot):
                     bot_name=self.name,
                     sede=sede_key,
                     reporte="todos",
-                    fecha_reporte=yesterday_iso,
+                    fecha_reporte=target_date_iso,
                     filas_insertadas=0,
                     estado="ERROR",
                     mensaje_error=str(exc),
