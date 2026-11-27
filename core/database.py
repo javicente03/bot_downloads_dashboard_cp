@@ -266,7 +266,15 @@ class SQLServerManager:
             ORDER BY fecha_reporte ASC, bot_name ASC, sede ASC, reporte ASC
         """)
 
-        engine = cls.get_engine()  # Ajusta al nombre exacto de tu getter/atributo engine en database.py
+        engine_getter = getattr(cls, "_get_engine", None)
+        engine = (
+            engine_getter()
+            if callable(engine_getter)
+            else (getattr(cls, "_engine", None) or getattr(cls, "engine", None))
+        )
+        if engine is None:
+            raise RuntimeError("No se encontró una instancia de engine activa en SQLServerManager.")
+
         with engine.connect() as conn:
             rows = conn.execute(query, params).mappings().all()
             return [dict(r) for r in rows]
